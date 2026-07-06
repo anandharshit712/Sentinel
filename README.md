@@ -1,0 +1,84 @@
+# 🚦 AI Delivery Intelligence Layer
+
+**Multi-Agent Code Review · Smart Test Selection · Explainable Promotion Gating — built on [Neuro-SAN](https://github.com/cognizant-ai-lab/neuro-san).**
+
+Cognizant Internal Hackathon project. One Neuro-SAN agent network acts as a connected intelligence layer across the delivery lifecycle (**review → test → promote**), where the output of each stage becomes a risk signal for the next: a Critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — *even when every test passes*.
+
+## The Problems
+
+| # | Problem |
+|---|---|
+| P1 | Code review is a slow, inconsistent, multi-expert bottleneck (days, not hours) |
+| P2 | CI runs the full test suite on every change — cost and latency scale with repo size, not change size |
+| P3 | Promotion is binary pass/fail: no risk weighting, no context, no reasoning trail |
+| P4 | The three gates are disconnected — signals never flow between them (the meta-problem) |
+
+## The Solution (at a glance)
+
+- **Multi-agent first-pass review** — specialist Security and Code Quality agents return a severity-ranked, deduplicated review report in seconds.
+- **Smart test selection** — deterministic diff + dependency-graph + test-mapping selects the relevant subset plus an always-on smoke set; the project's **own** test runner executes it (language-agnostic via manifest detection).
+- **Explainable promotion gating** — review findings + test results + change profile + environment context converge into one deterministic risk score (`risk-v1`); a graduated **trust ladder** yields *Promote / Hold / Escalate* with a full reasoning trail. Staging→production **never** auto-promotes.
+- **Design spine:** *LLM reasons, code decides* — scoring, policy and test execution are deterministic coded tools; LLM agents interpret, explain, and may only **raise** risk.
+
+Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with provider-agnostic fallbacks; self-hosted NIM option keeps code in-company.
+
+## Repository Layout
+
+```text
+.
+├── README.md                          ← you are here
+├── docs/
+│   ├── hackathon-delivery-intelligence.md   # original problem statement & idea (source doc)
+│   └── solution/                      # full design documentation set (start here)
+│       ├── README.md                  # index & reading order
+│       ├── 01-proposed-solution.md    # MASTER SPEC — single source of truth
+│       ├── 02-dfd.md                  # data flow diagrams L0/L1/L2 + data dictionary
+│       ├── 03-hld.md                  # high-level design (deployment, security, scale, ADRs)
+│       ├── 04-lld.md                  # low-level design (HOCON, coded tools, DDL, APIs)
+│       └── 05-architecture-diagram.md # six architecture views
+└── neuro-san-studio/                  # clone of cognizant-ai-lab/neuro-san-studio
+                                       # (framework reference: examples, docs, tooling)
+```
+
+## Documentation Set
+
+| Read | For |
+|---|---|
+| [Solution index](docs/solution/README.md) | Reading order & doc map |
+| [01 · Proposed Solution](docs/solution/01-proposed-solution.md) | What the system is and exactly how it works: 10-component agent network, risk formula, trust ladder, data contracts |
+| [02 · DFD](docs/solution/02-dfd.md) | How data moves: context → system → subsystem drill-downs, flow invariants |
+| [03 · HLD](docs/solution/03-hld.md) | How it deploys and survives: K8s + docker-compose, security model, failure modes, design decisions |
+| [04 · LLD](docs/solution/04-lld.md) | How to build it: full network HOCON, 16 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
+| [05 · Architecture](docs/solution/05-architecture-diagram.md) | The pictures: landscape, containers, agent topology, signal flow, deployments |
+
+All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown Preview Mermaid Support extension).
+
+## System Shape (60-second version)
+
+```mermaid
+flowchart LR
+    CI["GitHub Actions / Jenkins / GitLab CI"] -->|webhook| GW["Delivery Gateway<br/>(FastAPI)"]
+    GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>delivery_intelligence<br/>9 agents + 16 coded tools"]
+    NS -->|"NIM llama-3.3-70b"| NIM["NVIDIA NIM"]
+    NS --> PG[("PostgreSQL<br/>risk history + audit")]
+    GW --> DB["Decision Dashboard<br/>reports · trails · approvals"]
+    NS -->|"decision"| GW
+    GW -->|"gate status / promote / comment"| CI
+```
+
+Ten pipeline components: `delivery_coordinator` (frontman) → `change_analysis` → `security_review` ∥ `code_quality` ∥ `environment_context` → `review_synthesis` → `test_selection` → `test_runner` (CodedTool) → `risk_scoring` → `promotion_gating`.
+
+## Demo Scenarios (hackathon MVP)
+
+1. **Happy path** — small clean change → clean review → small test subset passes → low risk → auto-promote (dev→test) with visible reasoning trail.
+2. **The escalation (money shot)** — change touches auth module with planted string-concatenated SQL → Security agent flags **Critical** → risk spikes **although all tests pass** → gate escalates to human approval, reasoning trail citing the finding. Binary CI gating structurally cannot do this.
+
+## Status
+
+- ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md))
+- ✅ Complete design documentation ([docs/solution/](docs/solution/))
+- ⬜ Implementation (agent network HOCON, coded tools, gateway, dashboard, sample repos — fully specified in [LLD](docs/solution/04-lld.md))
+
+## Framework Reference
+
+The [`neuro-san-studio/`](neuro-san-studio/) folder is a clone of the official studio repo used as the working reference for HOCON schemas, AAOSA protocol, coded-tool interfaces, server/deployment patterns and examples. Key entry points: [user guide](neuro-san-studio/docs/user_guide.md) · [examples](neuro-san-studio/docs/examples.md) · [tutorial](neuro-san-studio/docs/tutorial.md).
