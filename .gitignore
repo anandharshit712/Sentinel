@@ -1,0 +1,4 @@
+# graphify artifacts (regenerate with /graphify docs)
+graphify-out/
+.graphify_python
+.graphify_*

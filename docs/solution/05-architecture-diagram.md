@@ -2,14 +2,14 @@
 
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) · [HLD](03-hld.md) (structure) · [LLD](04-lld.md) (element names). Six views; each states what it shows and the invariants it makes visible. Element names match the LLD exactly.
 
-| View | Question it answers |
-|---|---|
-| V1 System landscape | What talks to the system? |
-| V2 Container view | What are the deployable units, tech, ports? |
-| V3 Agent network topology | What runs inside Neuro-SAN? |
-| V4 Cross-stage signal flow | Why is this different from three disconnected tools? |
-| V5 Production deployment (K8s) | How does it run company-wide? |
-| V6 Hackathon deployment (compose) | How does the demo run? |
+| View                              | Question it answers                                  |
+| --------------------------------- | ---------------------------------------------------- |
+| V1 System landscape               | What talks to the system?                            |
+| V2 Container view                 | What are the deployable units, tech, ports?          |
+| V3 Agent network topology         | What runs inside Neuro-SAN?                          |
+| V4 Cross-stage signal flow        | Why is this different from three disconnected tools? |
+| V5 Production deployment (K8s)    | How does it run company-wide?                        |
+| V6 Hackathon deployment (compose) | How does the demo run?                               |
 
 ---
 
@@ -83,13 +83,13 @@ flowchart TB
     GW -->|"status / dispatch / comment"| CI
 ```
 
-| Container | Image | Scale unit |
-|---|---|---|
-| Delivery Gateway | `Dockerfile.gateway` (python 3.12 slim) | HPA 2–10 |
-| Neuro-SAN server | `Dockerfile.neuro-san` (python:3.13-slim base pattern, non-root uid 1001) | HPA 2–8 |
-| Runner sandbox | `Dockerfile.runner-python` / `runner-node` | Job per run |
-| PostgreSQL | managed / `postgres:16` | HA pair |
-| NSFlow | studio image | 1 (non-prod-critical) |
+| Container        | Image                                                                     | Scale unit            |
+| ---------------- | ------------------------------------------------------------------------- | --------------------- |
+| Delivery Gateway | `Dockerfile.gateway` (python 3.12 slim)                                   | HPA 2–10              |
+| Neuro-SAN server | `Dockerfile.neuro-san` (python:3.13-slim base pattern, non-root uid 1001) | HPA 2–8               |
+| Runner sandbox   | `Dockerfile.runner-python` / `runner-node`                                | Job per run           |
+| PostgreSQL       | managed / `postgres:16`                                                   | HA pair               |
+| NSFlow           | studio image                                                              | 1 (non-prod-critical) |
 
 ## V3 — Agent Network Topology (inside Neuro-SAN)
 
