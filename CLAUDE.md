@@ -16,13 +16,13 @@
 
 1. Any design change starts in `01-proposed-solution.md`, then propagates to 02–05. Docs must never contradict 01.
 2. Framework claims must be grounded in `neuro-san-studio/` (docs or code) — no guessed Neuro-SAN behavior. Key refs: `docs/user_guide.md`, `registries/*.hocon`, `coded_tools/`.
-3. Locked design decisions (revisit only if user asks): NVIDIA NIM primary LLM (`nvidia-llama-3.3-70b-instruct`) with fallback chain; PostgreSQL everywhere; K8s production / docker-compose hackathon; all three CI/CD platforms (GitHub Actions, Jenkins, GitLab CI) at equal depth; Mermaid for all diagrams.
+3. Locked design decisions (revisit only if user asks): NVIDIA NIM primary LLM (`nvidia-llama-3.3-70b-instruct`) with fallback chain; PostgreSQL everywhere; K8s production / docker-compose hackathon; GitHub Actions implemented for hackathon, Jenkins + GitLab CI specified as extension contracts and implemented post-hackathon (decided 2026-07-07); Mermaid for all diagrams.
 4. Core design principle in every decision: **LLM reasons, code decides** — risk formula, trust ladder, test execution are deterministic coded tools; LLM may only raise risk, never lower it; staging→production never auto-promotes.
 5. Naming: HOCON coded-tool names drop the `_tool` suffix; module files keep it (`test_runner` ↔ `coded_tools/delivery_intelligence/test_runner_tool.py`, class `TestRunnerTool`).
 
 ## Knowledge graph (graphify)
 
-`graphify-out/graph.json` maps all docs (98 nodes, 9 communities). Before answering cross-document questions, prefer querying it (`/graphify query "<question>"`) over re-reading the full doc set. After editing docs, refresh with `/graphify docs --update`.
+`graphify-out/graph.json` maps all docs (120 nodes, 14 communities). Before answering cross-document questions, prefer querying it (`/graphify query "<question>"`) over re-reading the full doc set. After editing docs, refresh with `/graphify docs --update`.
 
 ## Conventions
 

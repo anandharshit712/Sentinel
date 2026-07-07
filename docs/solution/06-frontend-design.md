@@ -269,7 +269,7 @@ build → dist/  ──copied──▶  gateway/static/   (04-lld.md §5 layout)
 Supports 01 §18 acceptance runs:
 
 - **Run 1 (happy path):** open `/runs/{id}` → watch timeline fill → review card early → small test subset passes → low band dial → `promote` decision card, auto-promoted, full trail.
-- **Run 2 (money shot):** planted SQL-injection change → ReviewReportCard shows a **Critical** security finding (red, `source` marked) → RiskScoreCard crosses 75 into `critical` **even though TestResultsCard is all-green** → DecisionCard = `escalate` with the trail's `review` section citing the finding → resolve live in `/approvals`.
+- **Run 2 (money shot):** planted SQL-injection + hardcoded-secret change → ReviewReportCard shows **two Critical** security findings (red, `source` marked) → RiskScoreCard crosses 75 into `critical` (95 per [01 §6](01-proposed-solution.md) worked check) **even though TestResultsCard is all-green** → DecisionCard = `escalate` with the trail's `review` section citing both findings → resolve live in `/approvals`.
 - **Side-by-side:** `/runs/compare?a=run1&b=run2` renders both detail panes — the two dials and two decision cards next to each other are the visual punchline. NSFlow runs beside the browser for live agent choreography.
 
 ---

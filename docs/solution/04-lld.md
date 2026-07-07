@@ -23,6 +23,7 @@ delivery-intelligence/
 │       ├── deploy_window_tool.py       ├── risk_calculator_tool.py
 │       ├── trust_ladder_tool.py        ├── decision_logger_tool.py
 │       ├── cicd_action_tool.py         ├── notification_tool.py
+│       ├── contract_store_tool.py          # generic: validate + write agent contracts to sly_data
 │       └── lib/                            # shared: dao.py, contracts.py, workspace.py, redact.py
 ├── config/
 │   ├── llm_config.hocon                    # NIM primary + optional fallback (§6)
@@ -171,9 +172,10 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
 2. Call dependency_cve for manifest changes; convert advisories into findings.
 3. Review each diff hunk against: SQL injection, XSS, CSRF, authn/authz flaws, input validation, unsafe deserialization, path traversal, command injection, insecure crypto, hardcoded credentials.
 4. Every finding: severity ∈ {critical, high, medium, low}, file, line range, CWE if known, explanation, concrete fix suggestion, source ∈ {tool, llm}.
-5. String-concatenated SQL with user-influenced input is ALWAYS at least high; in auth/payment-flagged files it is critical.
-6. Output ONLY the SecurityFindings JSON per schema. No prose.""" ${aaosa_instructions},
-            "tools": ["secret_scanner", "dependency_cve"]
+5. String-concatenated SQL with user-influenced input is ALWAYS at least high; in auth/payment-flagged files it is critical. Hardcoded credentials/secrets are ALWAYS critical.
+6. Call contract_store with contract_name="security_findings" and your complete SecurityFindings JSON — this validates and stores the contract in sly_data.
+7. Output ONLY the SecurityFindings JSON per schema. No prose.""" ${aaosa_instructions},
+            "tools": ["secret_scanner", "dependency_cve", "contract_store"]
         },
 
         # ---------- 4. CODE QUALITY ----------
@@ -188,8 +190,9 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
 2. Review hunks for: SOLID violations, DRY violations, naming/readability, error-handling gaps, resource leaks.
 3. Cross-check ChangeProfile.new_functions against test-file changes in the same diff; flag untested new functions.
 4. quality_score (0–100) per the deduction rubric in your QualityFindings schema.
-5. Output ONLY QualityFindings JSON. Every finding carries file + line range.""" ${aaosa_instructions},
-            "tools": ["complexity_metrics"]
+5. Call contract_store with contract_name="quality_findings" and your complete QualityFindings JSON — this validates and stores the contract in sly_data.
+6. Output ONLY QualityFindings JSON. Every finding carries file + line range.""" ${aaosa_instructions},
+            "tools": ["complexity_metrics", "contract_store"]
         },
 
         # ---------- 5. REVIEW SYNTHESIS ----------
@@ -220,8 +223,9 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
 2. You may ADD tests with one-line reasons (ambiguous mappings, integration folders touching flagged areas). You may NEVER remove tests from the base selection.
 3. If ChangeProfile.sensitive_flags is non-empty, widen to the owning module's full test directory.
 4. selection_confidence: high (coverage-map edges), medium (import/convention edges), low (sparse mapping) — take the weakest tier used.
-5. Output ONLY the TestPlan JSON per schema, including excluded_summary and estimated_runtime from the mapper.""" ${aaosa_instructions},
-            "tools": ["test_mapper"]
+5. Call contract_store with contract_name="test_plan" and the complete TestPlan JSON — this validates and stores it in sly_data, where test_runner reads it.
+6. Output ONLY the TestPlan JSON per schema, including excluded_summary and estimated_runtime from the mapper.""" ${aaosa_instructions},
+            "tools": ["test_mapper", "contract_store"]
         },
 
         # ---------- 7. TEST RUNNER (CodedTool, not an agent) ----------
@@ -244,8 +248,9 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
             "instructions": """You provide environment context for the target transition.
 1. Call incident_history for the repo + target environment.
 2. Call deploy_window for timing/freeze evaluation.
-3. Output ONLY the EnvContext JSON per schema; flags verbatim from tools plus a one-paragraph summary field.""" ${aaosa_instructions},
-            "tools": ["incident_history", "deploy_window"]
+3. Call contract_store with contract_name="env_context" and the complete EnvContext JSON — this validates and stores the contract in sly_data.
+4. Output ONLY the EnvContext JSON per schema; flags verbatim from tools plus a one-paragraph summary field.""" ${aaosa_instructions},
+            "tools": ["incident_history", "deploy_window", "contract_store"]
         },
 
         # ---------- 9. RISK SCORING ----------
@@ -296,7 +301,8 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
           "args": { "policy_path": "config/trust_ladder_policy.yaml" } },
         { "name": "decision_logger",   "class": "delivery_intelligence.decision_logger_tool.DecisionLoggerTool",     "function": ${fn_decision_logger} },
         { "name": "cicd_action",       "class": "delivery_intelligence.cicd_action_tool.CicdActionTool",             "function": ${fn_cicd_action} },
-        { "name": "notification",      "class": "delivery_intelligence.notification_tool.NotificationTool",          "function": ${fn_notification} }
+        { "name": "notification",      "class": "delivery_intelligence.notification_tool.NotificationTool",          "function": ${fn_notification} },
+        { "name": "contract_store",    "class": "delivery_intelligence.contract_store_tool.ContractStoreTool",       "function": ${fn_contract_store} }
     ]
 }
 ```
@@ -526,7 +532,7 @@ All contracts: `{"schema_version": "1", "run_id": string, "produced_by": string,
 }
 ```
 
-## 5. Coded Tools (all 16)
+## 5. Coded Tools (all 17)
 
 Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict, str]`; CPU/blocking work via `asyncio.to_thread`; on failure return `"Error: <reason>"` (never raise through the framework); every tool logs `run_id` from `sly_data["run_id"]`; DB access via `lib/dao.py` (SQLAlchemy engine from `DATABASE_URL`). Constructor kwargs come from the HOCON `args` block.
 
@@ -540,7 +546,7 @@ Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_i
 | 5.6  | `complexity_metrics_tool.ComplexityMetricsTool`                     | `{}`                                                                                                                                                                      | changed files, workspace → returns metrics                                                                       | Python: radon `cc_visit` per changed function (base vs head delta); JS/TS: decision-point count heuristic (if/for/while/case/&&/\|\|                                                                                                                                                                                                                                                                                                                                                       | catch/ternary); function length; regression = head − base                                                                   |
 | 5.7  | `report_publisher_tool.ReportPublisherTool`                         | `{ "review_report": {"type":"object"} }`                                                                                                                                  | `event`, `run_id` → `review_report` (validated), DB rows                                                         | JSON-schema validate → INSERT `review_reports` + `findings`; enqueue Gateway publication request (`POST {GATEWAY_INTERNAL_URL}/internal/publish-report`) for PR/MR comment                                                                                                                                                                                                                                                                                                                 |
 | 5.8  | `test_mapper_tool.TestMapperTool`                                   | `{}`                                                                                                                                                                      | `change_profile`, workspace, `repo_config` → returns map + base selection                                        | mapping precedence: (1) coverage map file if present (`.coverage` via coverage-json / istanbul `coverage-final.json`), (2) test-file import graph, (3) conventions `test_<stem>.py`, `<stem>.test.{js,ts}`, `tests/<pkg>/…`; base selection = covering(changed) ∪ covering(blast) ∪ smoke_set; runtime estimate from historical `test_results` (DAO) else count×default                                                                                                                    |
-| 5.9  | `test_runner_tool.TestRunnerTool`                                   | `{}`                                                                                                                                                                      | `test_plan`, workspace, `repo_config` → `test_results`                                                           | detection: `pyproject.toml`/`pytest.ini`/`requirements.txt`⇒`pytest <node-ids> --junitxml=out.xml -q`; `package.json`+jest⇒`npx jest --json --outputFile=out.json <patterns>`; else `npm test` parse-best-effort; subprocess: cwd=workspace, env-scrubbed (no tokens), `resource` limits, timeout=`repo_config.test_timeout_seconds` (default 900); parse JUnit-XML/jest-JSON → contract; **prod mode**: `RUNNER_MODE=k8s` submits runner Job, polls, fetches artifact — same contract out |
+| 5.9  | `test_runner_tool.TestRunnerTool`                                   | `{}`                                                                                                                                                                      | `test_plan`, workspace, `repo_config` → `test_results`                                                           | detection: `pyproject.toml`/`pytest.ini`/`requirements.txt`⇒`pytest <node-ids> --junitxml=out.xml -q`; `package.json`+jest⇒`npx jest --json --outputFile=out.json <patterns>` (pattern flag: `--testPathPatterns` Jest 30+ / `--testPathPattern` ≤29 — major detected from lockfile; sample repo pins Jest 30); else `npm test` parse-best-effort; subprocess: cwd=workspace, env-scrubbed (no tokens), `resource` limits, timeout=`repo_config.test_timeout_seconds` (default 900); parse JUnit-XML/jest-JSON → contract; **prod mode**: `RUNNER_MODE=k8s` submits runner Job, polls, fetches artifact — same contract out |
 | 5.10 | `incident_history_tool.IncidentHistoryTool`                         | `{}`                                                                                                                                                                      | `event` → returns incident stats                                                                                 | `SELECT count(*), max(occurred_at) FROM incidents WHERE repo=:r AND env=:e AND occurred_at > now()-interval '7 days'` (+30 d variant)                                                                                                                                                                                                                                                                                                                                                      |
 | 5.11 | `deploy_window_tool.DeployWindowTool`                               | `{}`                                                                                                                                                                      | `event` → returns window verdict                                                                                 | policy from `repo_config.yaml`: risky windows (cron-like: `Fri 16:00–23:59`, `Sat–Sun`, freeze dates list) evaluated against now() in configured TZ; returns `{risky, reason}`                                                                                                                                                                                                                                                                                                             |
 | 5.12 | `risk_calculator_tool.RiskCalculatorTool` (`args: weights_path`)    | `{ "risk_input": {"type":"object"}, "llm_escalation": {"type":"object","properties":{"points_added":{"type":"integer","minimum":0},"justification":{"type":"string"}}} }` | contracts already in sly_data (authoritative source; `risk_input` arg cross-checked against them) → `risk_score` | loads `risk_weights_v1.yaml` (exact table = [01 §6](01-proposed-solution.md)); computes per-factor points+caps from the **sly_data contracts, not the LLM-passed copy** (anti-tamper); `llm_escalation.points_added` clamped ≥0 (raise-only, enforced here, not by prompt); bands 0-24/25-49/50-74/75-100; writes contract                                                                                                                                                                 |
@@ -548,6 +554,7 @@ Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_i
 | 5.14 | `decision_logger_tool.DecisionLoggerTool`                           | `{ "decision": {"type":"object"} }`                                                                                                                                       | all contracts → `decision` (validated), DB rows                                                                  | validate → INSERT `decisions` (+`approvals` row if escalate) + `audit_events(actor='agent:promotion_gating')`; transactional                                                                                                                                                                                                                                                                                                                                                               |
 | 5.15 | `cicd_action_tool.CicdActionTool`                                   | `{ "action": {"type":"string","enum":["promote"]} }`                                                                                                                      | `event`, `decision` → appends `decision.actions_taken`                                                           | delegates to Gateway internal API (`POST /internal/cicd-action` with run_id) — Gateway owns platform creds & adapters; `SIMULATE_CICD=true` ⇒ logged no-op `{action:"none", detail:"simulated"}`                                                                                                                                                                                                                                                                                           |
 | 5.16 | `notification_tool.NotificationTool`                                | `{ "kind": {"type":"string","enum":["hold","escalate"]}, "summary": {"type":"string"} }`                                                                                  | `event`, `risk_score`, `decision`                                                                                | Slack/Teams incoming-webhook POST (config URL) with deep-link `…/runs/{run_id}`; always also INSERT dashboard notification row; failures logged, never fatal to the run                                                                                                                                                                                                                                                                                                                    |
+| 5.17 | `contract_store_tool.ContractStoreTool`                             | `{ "contract_name": {"type":"string","enum":["security_findings","quality_findings","test_plan","env_context"]}, "payload": {"type":"object"} }`                          | `run_id` → writes `payload` to the sly_data key named by `contract_name`                                         | Generic writer for LLM-produced contracts (sly_data is writable only by coded tools — [01 §5.4](01-proposed-solution.md)): stamps `schema_version/run_id/produced_by/produced_at`, JSON-schema-validates against the named contract (§4), writes to sly_data; invalid ⇒ `"Error: schema …"` (stage_failure path). Enum-restricted so it cannot overwrite tool-owned contracts (`change_profile`, `review_report`, `risk_score`, `decision`)                                                |
 
 ### Config files consumed by tools
 
@@ -608,7 +615,7 @@ Timeout 3700 s (> network `max_execution_seconds`); stream break ⇒ run `failed
 
 | Method & path                                                      | Auth role                                         | Purpose                                                      |
 | ------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------ |
-| `POST /webhooks/github` \| `/jenkins` \| `/gitlab`                 | signature/token                                   | F1 intake → 202 `{run_id}`                                   |
+| `POST /webhooks/github` \| `/jenkins` \| `/gitlab` (jenkins/gitlab post-hackathon) | signature/token                                   | F1 intake → 202 `{run_id}`                                   |
 | `POST /api/v1/simulate`                                            | admin                                             | replay recorded webhook payload (demo mode — identical path) |
 | `GET /api/v1/runs?repo=&band=&decision=&state=&page=`              | viewer                                            | runs list                                                    |
 | `GET /api/v1/runs/{run_id}`                                        | viewer                                            | full run detail (all contracts + trail)                      |
@@ -624,6 +631,8 @@ Run state machine (`runs.state`): `received → analyzing → reviewing → test
 
 ### 7.3 Platform adapters (`adapters/base.py`)
 
+Hackathon scope ([01 §12](01-proposed-solution.md)): `github.py` implemented; `jenkins.py` / `gitlab.py` are post-hackathon drop-ins behind the same protocol.
+
 ```python
 class CicdAdapter(Protocol):
     def verify(self, request) -> bool                       # HMAC-SHA256 (GitHub X-Hub-Signature-256) / GitLab X-Gitlab-Token / Jenkins shared token
@@ -636,8 +645,8 @@ class CicdAdapter(Protocol):
 ### 7.4 Pipeline snippets (per platform, condensed; full files in repo)
 
 **GitHub Actions** (`.github/workflows/delivery-intelligence.yml`): on `pull_request`/`workflow_dispatch` → single step `curl -sf -X POST $GW/webhooks/github -H "X-Hub-Signature-256: …" -d @event.json`; branch protection requires check `delivery-intelligence/gate`. Promotion = Gateway dispatches `deploy.yml` with `{environment}` input.
-**Jenkins** (`Jenkinsfile` stage): `stage('Delivery Intelligence') { httpRequest POST $GW/webhooks/jenkins …; waitUntil { gate = httpRequest GET $GW/api/v1/runs/$RUN_ID; gate.decision != null } ; error-if hold/escalate-unapproved }`. Promotion = Gateway `buildWithParameters` on the deploy job.
-**GitLab CI** (`.gitlab-ci.yml` job `delivery_intelligence`): webhook configured project-side (MR events); job polls run status API as above; MR gated by commit status. Promotion = Gateway pipeline-trigger with `TARGET_ENV`.
+**Jenkins** (post-hackathon; `Jenkinsfile` stage): `stage('Delivery Intelligence') { httpRequest POST $GW/webhooks/jenkins …; waitUntil { gate = httpRequest GET $GW/api/v1/runs/$RUN_ID; gate.decision != null } ; error-if hold/escalate-unapproved }`. Promotion = Gateway `buildWithParameters` on the deploy job.
+**GitLab CI** (post-hackathon; `.gitlab-ci.yml` job `delivery_intelligence`): webhook configured project-side (MR events); job polls run status API as above; MR gated by commit status. Promotion = Gateway pipeline-trigger with `TARGET_ENV`.
 
 ## 8. Database Schema (PostgreSQL 16, Alembic-managed)
 

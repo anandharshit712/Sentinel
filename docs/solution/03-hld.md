@@ -15,7 +15,7 @@
 | QA4 | Safety            | Zero unauthorized production deploys; LLM cannot lower risk                     | Hard-coded prod floor in `trust_ladder_tool`; raise-only LLM escalation          |
 | QA5 | Scalability       | Horizontal scale to org-wide concurrent runs                                    | Stateless Gateway & Neuro-SAN pods; per-run isolation; HPA                       |
 | QA6 | Adoptability      | Team onboarding = configuration only (webhook + repo config entry)              | Gateway adapters; no pipeline migration (D1 principle)                           |
-| QA7 | Portability       | Any of GitHub Actions / Jenkins / GitLab CI; any K8s; NIM hosted or self-hosted | Adapter interface; cloud-agnostic manifests; `nvidia` provider class + fallbacks |
+| QA7 | Portability       | Any of GitHub Actions / Jenkins / GitLab CI; any K8s; NIM hosted or self-hosted | Adapter interface (GitHub implemented in hackathon scope; Jenkins/GitLab specified as extension contracts, [01 §12](01-proposed-solution.md)); cloud-agnostic manifests; `nvidia` provider class + fallbacks |
 | QA8 | Data privacy      | Code and credentials never leave controlled boundaries                          | `sly_data` allow-lists; self-hosted NIM option; ephemeral workspaces             |
 
 ## 2. System Context
@@ -42,7 +42,7 @@ flowchart TB
     subgraph P2["Intelligence Plane — Neuro-SAN Server"]
         direction LR
         REG["Registry: delivery_intelligence.hocon<br/>(manifest.hocon)"]
-        AG["9 LLM agents + 16 coded tools<br/>(AGENT_TOOL_PATH)"]
+        AG["9 LLM agents + 17 coded tools<br/>(AGENT_TOOL_PATH)"]
         LLM["llm_config: NIM primary<br/>+ fallbacks"]
     end
 
@@ -80,7 +80,7 @@ flowchart TB
 | HOCON agent registry + manifest (`AGENT_MANIFEST_FILE`)                                             | `registries/delivery_intelligence.hocon` in `registries/manifest.hocon`              | LLD §2                             |
 | Frontman pattern (first tool, no `parameters`)                                                      | `delivery_coordinator`                                                               | LLD §3                             |
 | AAOSA substitutions (`aaosa_basic.hocon`)                                                           | specialist delegation semantics                                                      | LLD §3                             |
-| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 16 tools under `coded_tools/delivery_intelligence/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
+| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 17 tools under `coded_tools/delivery_intelligence/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
 | `sly_data` + `allow` blocks (`to_upstream` allow-list)                                              | secure bulletin board & result egress                                                | 01 §5.4, LLD §3 (frontman `allow`) |
 | Per-agent `llm_config` + `fallbacks` + `${?MODEL_NAME}`                                             | NIM primary, right-sizing, provider agnosticism                                      | LLD §6                             |
 | `structure_formats: "json"`                                                                         | frontman's final structured payload parsing                                          | LLD §3                             |
@@ -94,7 +94,7 @@ flowchart TB
 ### 4.1 Delivery Gateway (FastAPI, Python 3.12+)
 
 Modules (LLD §7 specifies routes/classes):
-`webhooks/` (3 receivers + verifier) · `adapters/` (inbound normalize, outbound act — one class per platform implementing `CicdAdapter`) · `workspace/` (clone/cleanup, disk quota) · `invoker/` (neuro-san HTTP streaming client, retry, timeout) · `runs/` (state machine: `received → analyzing → reviewing → testing → scoring → gated → done/failed`) · `approvals/` · `api/` (REST + SSE) · `db/` (SQLAlchemy DAO + Alembic migrations) · `static/` (dashboard SPA).
+`webhooks/` (GitHub receiver + verifier in hackathon scope; Jenkins/GitLab receivers post-hackathon) · `adapters/` (inbound normalize, outbound act — one class per platform implementing `CicdAdapter`) · `workspace/` (clone/cleanup, disk quota) · `invoker/` (neuro-san HTTP streaming client, retry, timeout) · `runs/` (state machine: `received → analyzing → reviewing → testing → scoring → gated → done/failed`) · `approvals/` · `api/` (REST + SSE) · `db/` (SQLAlchemy DAO + Alembic migrations) · `static/` (dashboard SPA).
 
 Statelessness: no in-memory run state survives a request; everything is Postgres-backed → any replica serves any request; SSE reconnects replay from persisted progress events.
 

@@ -350,6 +350,8 @@ flowchart TD
 | F15  | notification      | Hold/escalate summary + dashboard deep-link                                                                                                                                                               | P5.5 → E7                                                    |
 | F16  | approval          | `approve                                                                                                                                                                                                  | reject, comment, approver_identity`                          | E3 → P6 |
 
+Note: flows F5, F6, F8, F10 are produced by LLM agents but land on the sly_data bulletin board via the `contract_store` coded tool ([LLD §5.17](04-lld.md)) — sly_data is writable only by coded tools ([01 §5.4](01-proposed-solution.md)).
+
 **Invariants** (enforced by design, verifiable in audit):
 
 1. No flow bypasses P5 to reach F14 — every platform action descends from a logged `decision` (or an approval resolving one).

@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph SYSTEM["System containers"]
         GW["Delivery Gateway<br/>FastAPI · :8000<br/>webhooks, adapters, invoker,<br/>REST+SSE, dashboard static"]
-        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: delivery_intelligence<br/>16 coded tools (AGENT_TOOL_PATH)"]
+        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: delivery_intelligence<br/>17 coded tools (AGENT_TOOL_PATH)"]
         RUN["Test Runner Sandbox<br/>subprocess (demo) /<br/>ephemeral K8s Job (prod)"]
         NF["NSFlow · :4173<br/>agent visualization"]
         PG[("PostgreSQL 16 · :5432<br/>runs · findings · scores ·<br/>decisions · approvals · audit")]
@@ -124,6 +124,7 @@ flowchart TD
         T_EC["incident_history ·<br/>deploy_window"]
         T_RK["risk_calculator<br/>(risk-v1 weights)"]
         T_PG["trust_ladder (prod floor) ·<br/>decision_logger · cicd_action ·<br/>notification"]
+        T_CS["contract_store<br/>(validates + writes LLM-produced<br/>contracts to sly_data)"]
 
         FM --> CA & SR & QR & RS & TS & TE & EC & RK & PGA
         CA --- T_CA
@@ -134,6 +135,7 @@ flowchart TD
         EC --- T_EC
         RK --- T_RK
         PGA --- T_PG
+        SR & QR & TS & EC --- T_CS
     end
 
     T_RS & T_RK & T_PG & T_EC -.->|"DAO"| PG[("PostgreSQL")]
@@ -148,15 +150,15 @@ Invariants visible: exactly one frontman; specialists own only their leaf tools 
 ```mermaid
 flowchart LR
     subgraph S1["Review stage"]
-        F["Critical finding:<br/>SQL injection in auth module<br/>(security_review_agent)"]
+        F["2 Critical findings:<br/>SQL injection + hardcoded secret<br/>in auth module<br/>(security_review_agent)"]
     end
     subgraph S2["Test stage"]
         T["All selected tests PASS<br/>(test_runner)"]
     end
     subgraph S3["Decision stage"]
-        R["risk_calculator:<br/>+40 critical finding<br/>+15 auth sensitive flag<br/>= 55+ (high band)"]
-        G["trust_ladder test→qa:<br/>high ⇒ ESCALATE"]
-        H["Human approval required —<br/>reasoning trail cites finding SEC-001"]
+        R["risk_calculator:<br/>+40 SQLi critical +40 secret critical<br/>+15 auth sensitive flag<br/>= 95 (critical band)"]
+        G["trust_ladder test→qa:<br/>critical ⇒ ESCALATE"]
+        H["Human approval required —<br/>reasoning trail cites findings<br/>SEC-001, SEC-002"]
     end
     F -->|"review_report (F7)"| R
     T -->|"test_results (F9)"| R
@@ -242,4 +244,4 @@ flowchart LR
     GW -.->|"local clone"| SREPOS
 ```
 
-Same images and code paths as V5 minus scale-out (HLD A9: the demo is a subset, not a fork). Demo choreography: Run 1 (clean change → auto-promote) and Run 2 (planted SQLi → escalate despite green tests) both visible side-by-side as dashboard reasoning trails + NSFlow agent choreography.
+Same images and code paths as V5 minus scale-out (HLD A9: the demo is a subset, not a fork). Demo choreography: Run 1 (clean change → auto-promote) and Run 2 (planted SQLi + hardcoded secret → escalate despite green tests) both visible side-by-side as dashboard reasoning trails + NSFlow agent choreography.
