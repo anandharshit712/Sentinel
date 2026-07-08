@@ -1,0 +1,4 @@
+# Sentinel network manifest. Each served network = a key with boolean true. (04 §5)
+{
+    "sentinel.hocon": true
+}
