@@ -103,6 +103,88 @@ def get_run(run_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def find_run_by_event_id(event_id: str) -> str | None:
+    """Latest run_id for a given event_id (idempotency for simulate/webhook intake)."""
+    r = models.runs
+    with get_engine().connect() as c:
+        row = c.execute(
+            select(r.c.run_id).where(r.c.event["event_id"].astext == event_id)
+            .order_by(r.c.created_at.desc()).limit(1)).first()
+    return row[0] if row else None
+
+
+def list_runs(*, repo: str | None = None, band: str | None = None, decision: str | None = None,
+              state: str | None = None, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Runs list (04 §7.2) enriched with risk band/score + decision via left joins."""
+    r, rs, d = models.runs, models.risk_scores, models.decisions
+    j = r.join(rs, r.c.run_id == rs.c.run_id, isouter=True).join(
+        d, r.c.run_id == d.c.run_id, isouter=True)
+    q = select(r.c.run_id, r.c.repo, r.c.from_env, r.c.to_env, r.c.state,
+               r.c.created_at, r.c.finished_at, rs.c.score, rs.c.band,
+               d.c.decision, d.c.approval_required).select_from(j)
+    if repo:
+        q = q.where(r.c.repo == repo)
+    if state:
+        q = q.where(r.c.state == state)
+    if band:
+        q = q.where(rs.c.band == band)
+    if decision:
+        q = q.where(d.c.decision == decision)
+    q = q.order_by(r.c.created_at.desc()).limit(limit).offset(offset)
+    with get_engine().connect() as c:
+        return [dict(m) for m in c.execute(q).mappings().all()]
+
+
+def get_payload(table: str, run_id: str) -> dict | None:
+    """Fetch one per-run JSONB payload row (review_reports/test_results/risk_scores/…)."""
+    t = models.RUN_PAYLOAD_TABLES.get(table)
+    if t is None:
+        raise KeyError(f"{table} is not a per-run payload table")
+    with get_engine().connect() as c:
+        row = c.execute(select(t).where(t.c.run_id == run_id)).mappings().first()
+    return dict(row) if row else None
+
+
+def get_decision(run_id: str) -> dict | None:
+    with get_engine().connect() as c:
+        row = c.execute(select(models.decisions).where(
+            models.decisions.c.run_id == run_id)).mappings().first()
+    return dict(row) if row else None
+
+
+def list_approvals(status: str = "pending") -> list[dict]:
+    a = models.approvals
+    with get_engine().connect() as c:
+        rows = c.execute(select(a).where(a.c.status == status)
+                         .order_by(a.c.created_at.desc())).mappings().all()
+    return [dict(m) for m in rows]
+
+
+def resolve_approval(approval_id: int, status: str, approver: str,
+                     comment: str | None = None) -> dict | None:
+    """Resolve a pending approval (approve|reject). Returns the updated row (with run_id) or None."""
+    a = models.approvals
+    with get_engine().begin() as c:
+        row = c.execute(a.update().where(a.c.id == approval_id, a.c.status == "pending").values(
+            status=status, approver=approver, comment=comment,
+            resolved_at=_dt.datetime.now(_dt.timezone.utc)).returning(
+            a.c.id, a.c.run_id, a.c.status)).mappings().first()
+        if row:
+            c.execute(models.audit_events.insert().values(
+                run_id=row["run_id"], actor=approver, action=f"approval_{status}",
+                payload={"approval_id": approval_id, "comment": comment}))
+    return dict(row) if row else None
+
+
+def list_audit(run_id: str | None = None, limit: int = 200) -> list[dict]:
+    e = models.audit_events
+    q = select(e).order_by(e.c.at.desc()).limit(limit)
+    if run_id:
+        q = q.where(e.c.run_id == run_id)
+    with get_engine().connect() as c:
+        return [dict(m) for m in c.execute(q).mappings().all()]
+
+
 def demo() -> None:
     """Live round-trip against the sentinel DB, then clean up the test rows."""
     rid = "dddddddd-dead-beef-dead-dddddddddddd"
