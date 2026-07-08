@@ -54,8 +54,24 @@ def test_report_publisher_validates_persists_and_stores(monkeypatch):
     assert calls["cols"] == {"pr_health_score": 88, "recommendation": "approve"}
 
 
-def test_report_publisher_rejects_missing_payload():
-    assert ReportPublisherTool().invoke({}, {"run_id": "r"}).startswith("Error:")
+def test_report_publisher_synthesizes_from_sly_data(monkeypatch):
+    monkeypatch.setattr(dao, "save_run_payload", lambda *a, **k: None)
+    sly = {"run_id": "r7",
+           "security_findings": {"findings": [
+               {"id": "SEC-001", "severity": "critical", "file": "a.py", "line_start": 1,
+                "category": "sql_injection", "title": "SQLi", "source": "llm"},
+               {"id": "SEC-002", "severity": "critical", "file": "a.py", "line_start": 1,
+                "category": "sql_injection", "title": "SQLi dup", "source": "tool"}]},
+           "quality_findings": {"findings": [
+               {"id": "QUAL-001", "severity": "medium", "file": "b.py", "line_start": 9,
+                "category": "complexity", "title": "complex fn", "source": "llm"}]}}
+    out = ReportPublisherTool().invoke({}, sly)
+    assert out["published"] is True
+    rr = sly["review_report"]
+    assert rr["counts"] == {"critical": 1, "high": 0, "medium": 1, "low": 0}  # SEC dup merged
+    assert rr["pr_health_score"] == 100 - 25 - 4
+    assert rr["recommendation"] == "request_changes"
+    assert contracts.is_valid("review_report", rr)
 
 
 def test_decision_logger_validates_and_persists(monkeypatch):

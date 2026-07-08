@@ -59,8 +59,13 @@ class SecretScannerTool(CodedTool):
         try:
             profile = sly_data.get("change_profile") or sly_data.get("change_profile_wip") or {}
             findings: List[Dict[str, Any]] = []
+            # LLMs can't see sly_data (user_guide "Sly data"), so return the added lines the
+            # security_review_agent must review itself (SQLi/XSS/etc). Capped to bound context.
+            added: List[Dict[str, Any]] = []
             n = 0
             for path, lineno, content in _added_lines(profile):
+                if len(added) < 300:
+                    added.append({"file": path, "line": lineno, "code": content})
                 cat = cwe = title = None
                 for c, rx, w, t in _RULES:
                     if rx.search(content):
@@ -86,8 +91,8 @@ class SecretScannerTool(CodedTool):
                     "fix_suggestion": "Remove the secret from source and rotate it; load from a secrets manager or env var.",
                     "source": "tool",
                 })
-            logger.info("run %s: secret_scanner %d finding(s)", run_id, len(findings))
-            return {"findings": findings}
+            logger.info("run %s: secret_scanner %d finding(s), %d added line(s)", run_id, len(findings), len(added))
+            return {"findings": findings, "added_lines": added}
         except Exception as e:
             return f"Error: {e}"
 

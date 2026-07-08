@@ -24,6 +24,7 @@ def test_secret_scanner_flags_each_secret_type_and_ignores_benign():
     cats = {f["category"] for f in findings}
     assert cats == {"aws_access_key", "private_key", "jwt", "hardcoded_credential", "high_entropy_secret"}
     assert all(f["source"] == "tool" and f["file"] == "app/config.py" for f in findings)
+    assert len(out["added_lines"]) == 6  # all added lines returned for the LLM to review
 
 
 def test_secret_scanner_only_scans_added_lines():
