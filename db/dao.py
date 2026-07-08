@@ -76,6 +76,27 @@ def record_audit(run_id: str | None, actor: str, action: str, payload: dict | No
             run_id=run_id, actor=actor, action=action, payload=payload))
 
 
+def insert_decision(run_id: str, decision: dict) -> None:
+    """Persist a decision (+ a pending approval when required) + audit, in one transaction (decision_logger)."""
+    with get_engine().begin() as c:
+        c.execute(pg_insert(models.decisions).values(
+            run_id=run_id, decision=decision["decision"], policy_version=decision["policy_version"],
+            rule_fired=decision.get("rule_fired"), reasoning_trail=decision["reasoning_trail"],
+            approval_required=decision["approval_required"],
+        ).on_conflict_do_nothing(index_elements=["run_id"]))
+        if decision.get("approval_required"):
+            c.execute(models.approvals.insert().values(run_id=run_id, status="pending"))
+        c.execute(models.audit_events.insert().values(
+            run_id=run_id, actor="agent:promotion_gating", action="decision_logged",
+            payload={"decision": decision["decision"], "rule_fired": decision.get("rule_fired")}))
+
+
+def insert_notification(run_id: str | None, kind: str, summary: str) -> None:
+    """Insert a dashboard notification row (notification_tool; failures are caller-handled non-fatal)."""
+    with get_engine().begin() as c:
+        c.execute(models.notifications.insert().values(run_id=run_id, kind=kind, summary=summary))
+
+
 def get_run(run_id: str) -> dict | None:
     with get_engine().connect() as c:
         row = c.execute(select(models.runs).where(models.runs.c.run_id == run_id)).mappings().first()
