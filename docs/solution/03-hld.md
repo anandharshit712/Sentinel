@@ -1,4 +1,4 @@
-# AI Delivery Intelligence Layer — High-Level Design (HLD)
+# Sentinel — High-Level Design (HLD)
 
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) (authoritative solution spec). Companions: [DFD](02-dfd.md) · [LLD](04-lld.md) · [Architecture Diagram](05-architecture-diagram.md).
 **Scope:** system-level structure, deployment, integration, data, security, scalability, availability, observability, and the design decisions binding the LLD.
@@ -20,7 +20,7 @@
 
 ## 2. System Context
 
-See [DFD L0](02-dfd.md#1-level-0--context-diagram). Boundary: **Delivery Gateway + Neuro-SAN server (network `delivery_intelligence`) + PostgreSQL + Dashboard/NSFlow**. Externals: CI/CD platforms, git hosting, NIM endpoint, OSV.dev, Slack/Teams, humans (developer, approver).
+See [DFD L0](02-dfd.md#1-level-0--context-diagram). Boundary: **Delivery Gateway + Neuro-SAN server (network `sentinel`) + PostgreSQL + Dashboard/NSFlow**. Externals: CI/CD platforms, git hosting, NIM endpoint, OSV.dev, Slack/Teams, humans (developer, approver).
 
 ## 3. Logical Architecture
 
@@ -41,7 +41,7 @@ flowchart TB
 
     subgraph P2["Intelligence Plane — Neuro-SAN Server"]
         direction LR
-        REG["Registry: delivery_intelligence.hocon<br/>(manifest.hocon)"]
+        REG["Registry: sentinel.hocon<br/>(manifest.hocon)"]
         AG["9 LLM agents + 17 coded tools<br/>(AGENT_TOOL_PATH)"]
         LLM["llm_config: NIM primary<br/>+ fallbacks"]
     end
@@ -53,7 +53,7 @@ flowchart TB
     end
 
     WH --> NORM --> WS --> INV
-    INV -->|"POST /api/v1/delivery_intelligence/streaming_chat"| REG
+    INV -->|"POST /api/v1/sentinel/streaming_chat"| REG
     AG -->|"DAO writes"| PG
     INV -->|"stream relay"| API
     API --> UI
@@ -77,10 +77,10 @@ flowchart TB
 
 | Capability                                                                                          | Where used                                                                           | Reference                          |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------- |
-| HOCON agent registry + manifest (`AGENT_MANIFEST_FILE`)                                             | `registries/delivery_intelligence.hocon` in `registries/manifest.hocon`              | LLD §2                             |
+| HOCON agent registry + manifest (`AGENT_MANIFEST_FILE`)                                             | `registries/sentinel.hocon` in `registries/manifest.hocon`              | LLD §2                             |
 | Frontman pattern (first tool, no `parameters`)                                                      | `delivery_coordinator`                                                               | LLD §3                             |
 | AAOSA substitutions (`aaosa_basic.hocon`)                                                           | specialist delegation semantics                                                      | LLD §3                             |
-| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 17 tools under `coded_tools/delivery_intelligence/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
+| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 17 tools under `coded_tools/sentinel/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
 | `sly_data` + `allow` blocks (`to_upstream` allow-list)                                              | secure bulletin board & result egress                                                | 01 §5.4, LLD §3 (frontman `allow`) |
 | Per-agent `llm_config` + `fallbacks` + `${?MODEL_NAME}`                                             | NIM primary, right-sizing, provider agnosticism                                      | LLD §6                             |
 | `structure_formats: "json"`                                                                         | frontman's final structured payload parsing                                          | LLD §3                             |
@@ -100,7 +100,7 @@ Statelessness: no in-memory run state survives a request; everything is Postgres
 
 ### 4.2 Neuro-SAN server deployment unit
 
-Stock neuro-san server (`python -m neuro_san.service.main_loop.server_main_loop`) in our image with: `registries/` (network + manifest), `coded_tools/delivery_intelligence/`, `config/` (llm_config, weights, policies). Key env: `AGENT_MANIFEST_FILE`, `AGENT_TOOL_PATH=coded_tools`, `AGENT_HTTP_PORT=8080` (gRPC 30011 internal), `AGENT_MAX_CONCURRENT_REQUESTS` (default 50/pod), `NVIDIA_API_KEY` (or in-cluster NIM URL), `DATABASE_URL` (coded-tool DAO), `AGENT_SERVICE_LOG_JSON=logging.hocon`.
+Stock neuro-san server (`python -m neuro_san.service.main_loop.server_main_loop`) in our image with: `registries/` (network + manifest), `coded_tools/sentinel/`, `config/` (llm_config, weights, policies). Key env: `AGENT_MANIFEST_FILE`, `AGENT_TOOL_PATH=coded_tools`, `AGENT_HTTP_PORT=8080` (gRPC 30011 internal), `AGENT_MAX_CONCURRENT_REQUESTS` (default 50/pod), `NVIDIA_API_KEY` (or in-cluster NIM URL), `DATABASE_URL` (coded-tool DAO), `AGENT_SERVICE_LOG_JSON=logging.hocon`.
 
 ### 4.3 Test-execution sandbox
 
@@ -130,7 +130,7 @@ sequenceDiagram
     GW->>GW: verify signature, normalize → DeliveryEvent
     GW->>PG: INSERT run (received)
     GW->>GW: shallow clone @ head_sha (workspace)
-    GW->>NS: POST /api/v1/delivery_intelligence/streaming_chat<br/>{user_message: event JSON, sly_data: {event, run_id, git_token, repo_workspace}}
+    GW->>NS: POST /api/v1/sentinel/streaming_chat<br/>{user_message: event JSON, sly_data: {event, run_id, git_token, repo_workspace}}
     activate NS
     NS->>AG: change_analysis → change_profile
     par security review
@@ -189,7 +189,7 @@ Services (one network, one volume set): `gateway` (8000; mounts workspace volume
 
 ```mermaid
 flowchart TB
-    subgraph K8S["Kubernetes cluster — namespace: delivery-intel"]
+    subgraph K8S["Kubernetes cluster — namespace: sentinel"]
         ING["Ingress (TLS)<br/>gw.company.internal"]
         subgraph GWD["Deployment: gateway (HPA 2–10)"]
             GW1["gateway pod"]

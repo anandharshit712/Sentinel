@@ -9,3 +9,5 @@ graphify-out/
 logs/
 __pycache__/
 *.pyc
+*.db          # nsflow/sqlite runtime artifacts (Sentinel uses Postgres)
+nss_local.db

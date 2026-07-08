@@ -1,0 +1,30 @@
+# Sentinel trust ladder — policy version ladder-v1 (01 §7).
+# trust_ladder_tool reads this. Decisions: promote | hold | escalate.
+# Policy can TIGHTEN but never LOOSEN: the tool hard-codes escalate for any to_env==production
+# regardless of what's written here. Unknown transition => escalate (fail-closed, see `default`).
+policy_version: ladder-v1
+
+transitions:
+  "dev->test":
+    low: promote
+    medium: promote
+    high: promote
+    critical: hold
+    escalate_at_score: 90        # within critical band, score >= 90 escalates instead of hold
+  "test->qa":
+    low: promote
+    medium: hold
+    high: hold
+    critical: escalate
+  "qa->staging":
+    low: promote
+    medium: escalate             # "recommend + human approval"
+    high: escalate
+    critical: escalate
+  "staging->production":         # INFORMATIONAL ONLY — tool enforces escalate for to_env=production
+    low: escalate
+    medium: escalate
+    high: escalate
+    critical: escalate
+
+default: escalate                # any transition not listed above

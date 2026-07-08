@@ -1,24 +1,24 @@
-# 🚦 AI Delivery Intelligence Layer
+# 🚦 Sentinel — AI Delivery Intelligence Layer
 
 **Multi-Agent Code Review · Smart Test Selection · Explainable Promotion Gating — built on [Neuro-SAN](https://github.com/cognizant-ai-lab/neuro-san).**
 
-Cognizant Internal Hackathon project. One Neuro-SAN agent network acts as a connected intelligence layer across the delivery lifecycle (**review → test → promote**), where the output of each stage becomes a risk signal for the next: a Critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — *even when every test passes*.
+Cognizant Internal Hackathon project. One Neuro-SAN agent network acts as a connected intelligence layer across the delivery lifecycle (**review → test → promote**), where the output of each stage becomes a risk signal for the next: a Critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — _even when every test passes_.
 
 ## The Problems
 
-| # | Problem |
-|---|---|
-| P1 | Code review is a slow, inconsistent, multi-expert bottleneck (days, not hours) |
-| P2 | CI runs the full test suite on every change — cost and latency scale with repo size, not change size |
-| P3 | Promotion is binary pass/fail: no risk weighting, no context, no reasoning trail |
-| P4 | The three gates are disconnected — signals never flow between them (the meta-problem) |
+| #   | Problem                                                                                              |
+| --- | ---------------------------------------------------------------------------------------------------- |
+| P1  | Code review is a slow, inconsistent, multi-expert bottleneck (days, not hours)                       |
+| P2  | CI runs the full test suite on every change — cost and latency scale with repo size, not change size |
+| P3  | Promotion is binary pass/fail: no risk weighting, no context, no reasoning trail                     |
+| P4  | The three gates are disconnected — signals never flow between them (the meta-problem)                |
 
 ## The Solution (at a glance)
 
 - **Multi-agent first-pass review** — specialist Security and Code Quality agents return a severity-ranked, deduplicated review report in seconds.
 - **Smart test selection** — deterministic diff + dependency-graph + test-mapping selects the relevant subset plus an always-on smoke set; the project's **own** test runner executes it (language-agnostic via manifest detection).
-- **Explainable promotion gating** — review findings + test results + change profile + environment context converge into one deterministic risk score (`risk-v1`); a graduated **trust ladder** yields *Promote / Hold / Escalate* with a full reasoning trail. Staging→production **never** auto-promotes.
-- **Design spine:** *LLM reasons, code decides* — scoring, policy and test execution are deterministic coded tools; LLM agents interpret, explain, and may only **raise** risk.
+- **Explainable promotion gating** — review findings + test results + change profile + environment context converge into one deterministic risk score (`risk-v1`); a graduated **trust ladder** yields _Promote / Hold / Escalate_ with a full reasoning trail. Staging→production **never** auto-promotes.
+- **Design spine:** _LLM reasons, code decides_ — scoring, policy and test execution are deterministic coded tools; LLM agents interpret, explain, and may only **raise** risk.
 
 Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with provider-agnostic fallbacks; self-hosted NIM option keeps code in-company.
 
@@ -42,14 +42,14 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with prov
 
 ## Documentation Set
 
-| Read | For |
-|---|---|
-| [Solution index](docs/solution/README.md) | Reading order & doc map |
-| [01 · Proposed Solution](docs/solution/01-proposed-solution.md) | What the system is and exactly how it works: 10-component agent network, risk formula, trust ladder, data contracts |
-| [02 · DFD](docs/solution/02-dfd.md) | How data moves: context → system → subsystem drill-downs, flow invariants |
-| [03 · HLD](docs/solution/03-hld.md) | How it deploys and survives: K8s + docker-compose, security model, failure modes, design decisions |
-| [04 · LLD](docs/solution/04-lld.md) | How to build it: full network HOCON, 16 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
-| [05 · Architecture](docs/solution/05-architecture-diagram.md) | The pictures: landscape, containers, agent topology, signal flow, deployments |
+| Read                                                            | For                                                                                                                                          |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Solution index](docs/solution/README.md)                       | Reading order & doc map                                                                                                                      |
+| [01 · Proposed Solution](docs/solution/01-proposed-solution.md) | What the system is and exactly how it works: 10-component agent network, risk formula, trust ladder, data contracts                          |
+| [02 · DFD](docs/solution/02-dfd.md)                             | How data moves: context → system → subsystem drill-downs, flow invariants                                                                    |
+| [03 · HLD](docs/solution/03-hld.md)                             | How it deploys and survives: K8s + docker-compose, security model, failure modes, design decisions                                           |
+| [04 · LLD](docs/solution/04-lld.md)                             | How to build it: full network HOCON, 16 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
+| [05 · Architecture](docs/solution/05-architecture-diagram.md)   | The pictures: landscape, containers, agent topology, signal flow, deployments                                                                |
 
 All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown Preview Mermaid Support extension).
 
@@ -58,7 +58,7 @@ All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown P
 ```mermaid
 flowchart LR
     CI["GitHub Actions / Jenkins / GitLab CI"] -->|webhook| GW["Delivery Gateway<br/>(FastAPI)"]
-    GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>delivery_intelligence<br/>9 agents + 16 coded tools"]
+    GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>sentinel<br/>9 agents + 16 coded tools"]
     NS -->|"NIM llama-3.3-70b"| NIM["NVIDIA NIM"]
     NS --> PG[("PostgreSQL<br/>risk history + audit")]
     GW --> DB["Decision Dashboard<br/>reports · trails · approvals"]

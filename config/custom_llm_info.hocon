@@ -1,0 +1,8 @@
+{
+    # Right-sizing slot: lighter NIM model for code_quality_agent / environment_context_agent
+    # when LIGHT_MODEL_NAME=nvidia-llama-3.1-8b-instruct is set. Wired via AGENT_LLM_INFO_FILE. (04 §6.2)
+    # use_model_name maps the neuro-san key -> the actual NIM model id (required; not a built-in).
+    "nvidia-llama-3.1-8b-instruct": { "use_model_name": "meta/llama-3.1-8b-instruct", "class": "nvidia", "max_output_tokens": 8192 },
+    # Working stand-in for the locked 70B (which times out on the public endpoint). 119B, fast, tool-calls.
+    "nvidia-mistral-small-4-119b": { "use_model_name": "mistralai/mistral-small-4-119b-2603", "class": "nvidia", "max_output_tokens": 8192 }
+}

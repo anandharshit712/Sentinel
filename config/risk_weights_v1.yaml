@@ -1,0 +1,48 @@
+# Sentinel risk formula weights — formula version risk-v1 (01 §6).
+# risk_calculator_tool: score = min(score_cap, Σ contributions); monotonic (nothing subtracts).
+# Change weights => new file + formula_version bump (never mutate in place).
+formula_version: risk-v1
+score_cap: 100
+
+# per-severity security findings: points each, capped per group
+security:
+  critical: {points: 40, cap: 80}
+  high:     {points: 15, cap: 45}
+  medium:   {points: 5,  cap: 20}
+  low:      {points: 1,  cap: 5}
+
+# quality: (100 - pr_health_score) * health_factor, capped
+quality:
+  health_factor: 0.15
+  cap: 15
+
+tests:
+  selected_failure_base: 25            # any selected-test failure
+  selected_failure_additional_suite: 10   # per additional failing suite
+  selected_failure_cap: 45
+  smoke_failure: 40
+  low_confidence: 10                   # selection_confidence == low
+  stage_failure: 30                    # stage failure / tests could not run
+
+change:
+  sensitive_flag: {points: 15, cap: 30}    # per sensitive-area flag
+  blast_radius:
+    gt_20: 10                          # > 20 dependent modules
+    gt_50: 20                          # > 50 dependent modules
+  change_size:
+    gt_500_loc: 5                      # > 500 changed LOC
+    gt_2000_loc: 10                    # > 2000 changed LOC
+
+env:
+  incident_recent: 15                  # incident on repo+env in last 7 days
+  deploy_window: 10                    # deploy-window violation
+  env_unstable: 10                     # target env currently unstable
+  oversized_batch: 5                   # oversized promotion batch
+
+# LLM anomaly escalation is raise-only, applied in-tool (clamped >= 0); not a static weight.
+
+bands:                                 # inclusive ranges [min, max]
+  low:      [0, 24]
+  medium:   [25, 49]
+  high:     [50, 74]
+  critical: [75, 100]

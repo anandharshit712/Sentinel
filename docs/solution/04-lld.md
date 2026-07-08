@@ -1,4 +1,4 @@
-# AI Delivery Intelligence Layer — Low-Level Design (LLD)
+# Sentinel — Low-Level Design (LLD)
 
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) · constraints from [HLD](03-hld.md) · flows from [DFD](02-dfd.md).
 **Contents:** project layout & runtime config → agent network HOCON → data contracts → coded tools → LLM config → Gateway (API, adapters, CI snippets) → DB DDL → dashboard → deployment artifacts → testing → error handling.
@@ -8,13 +8,13 @@
 ## 1. Project Layout
 
 ```text
-delivery-intelligence/
+sentinel/
 ├── registries/
-│   ├── manifest.hocon                      # {"delivery_intelligence.hocon": true}
+│   ├── manifest.hocon                      # {"sentinel.hocon": true}
 │   ├── aaosa_basic.hocon                   # stock AAOSA substitutions (copied from studio)
-│   └── delivery_intelligence.hocon         # THE agent network (§3)
+│   └── sentinel.hocon         # THE agent network (§3)
 ├── coded_tools/
-│   └── delivery_intelligence/              # AGENT_TOOL_PATH modules (§5)
+│   └── sentinel/              # AGENT_TOOL_PATH modules (§5)
 │       ├── git_diff_tool.py            ├── ast_analyzer_tool.py
 │       ├── dependency_graph_tool.py    ├── secret_scanner_tool.py
 │       ├── dependency_cve_tool.py      ├── complexity_metrics_tool.py
@@ -23,8 +23,13 @@ delivery-intelligence/
 │       ├── deploy_window_tool.py       ├── risk_calculator_tool.py
 │       ├── trust_ladder_tool.py        ├── decision_logger_tool.py
 │       ├── cicd_action_tool.py         ├── notification_tool.py
-│       ├── contract_store_tool.py          # generic: validate + write agent contracts to sly_data
-│       └── lib/                            # shared: dao.py, contracts.py, workspace.py, redact.py
+│       └── contract_store_tool.py          # generic: validate + write agent contracts to sly_data
+├── lib/                                    # shared by coded tools + gateway: contracts.py, workspace.py, redact.py
+├── db/                                     # PostgreSQL component (own top-level; owns the `sentinel` schema)
+│   ├── alembic.ini
+│   ├── models.py                           # SQLAlchemy models — 13 tables (§8)
+│   ├── dao.py                              # shared DAO (coded tools + gateway)
+│   └── migrations/{env.py,versions/}       # Alembic baseline (§8)
 ├── config/
 │   ├── llm_config.hocon                    # NIM primary + optional fallback (§6)
 │   ├── custom_llm_info.hocon               # adds smaller NIM model (§6.2)
@@ -40,8 +45,7 @@ delivery-intelligence/
 │   ├── runs/{state.py,service.py}
 │   ├── approvals/service.py
 │   ├── api/{runs.py,approvals.py,events.py,simulate.py}
-│   ├── db/{models.py,dao.py,migrations/}
-│   └── static/                             # dashboard SPA
+│   └── static/                             # dashboard SPA   (DB access via top-level db/)
 ├── samples/
 │   ├── python-payments-service/            # Flask + pytest (demo repo A)
 │   └── node-catalog-service/               # Express + Jest (demo repo B)
@@ -51,7 +55,7 @@ delivery-intelligence/
 │   └── k8s/                                # §10.2 manifest set
 ├── tests/
 │   ├── coded_tools/                        # pytest unit tests
-│   └── fixtures/delivery_intelligence/     # data-driven network tests (§11)
+│   └── fixtures/sentinel/     # data-driven network tests (§11)
 └── logging.hocon
 ```
 
@@ -62,7 +66,7 @@ delivery-intelligence/
 | Var                                                 | Component           | Value / purpose                                                                 |
 | --------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------- |
 | `AGENT_MANIFEST_FILE`                               | neuro-san           | `registries/manifest.hocon`                                                     |
-| `AGENT_TOOL_PATH`                                   | neuro-san           | `coded_tools` (module refs resolve as `delivery_intelligence.<module>.<Class>`) |
+| `AGENT_TOOL_PATH`                                   | neuro-san           | `coded_tools` (module refs resolve as `sentinel.<module>.<Class>`) |
 | `AGENT_LLM_INFO_FILE`                               | neuro-san           | `config/custom_llm_info.hocon` (registers smaller NIM model)                    |
 | `AGENT_HTTP_PORT`                                   | neuro-san           | `8080` (gRPC default `30011` stays internal)                                    |
 | `AGENT_MAX_CONCURRENT_REQUESTS`                     | neuro-san           | `50` default; tune per pod                                                      |
@@ -89,7 +93,7 @@ delivery-intelligence/
 | `metadata`              | description/tags/sample_queries | NSFlow & discovery                                                |
 | `structure_formats`     | `"json"` (frontman)             | final message parsed into ChatMessage `structure` for the Gateway |
 
-## 3. Agent Network — `registries/delivery_intelligence.hocon`
+## 3. Agent Network — `registries/sentinel.hocon`
 
 Complete structural HOCON. Instruction bodies are abridged here to their normative numbered rules (full prose lives in the file); every `function`/`tools`/`allow` block is exact.
 
@@ -104,7 +108,7 @@ Complete structural HOCON. Instruction bodies are abridged here to their normati
     "error_formatter": "json",
 
     "metadata": {
-        "description": "AI Delivery Intelligence Layer: multi-agent code review, smart test selection, explainable promotion gating.",
+        "description": "Sentinel: multi-agent code review, smart test selection, explainable promotion gating.",
         "tags": ["delivery", "ci-cd", "code-review", "risk"],
         "sample_queries": ["Process this DeliveryEvent: {…}"]
     },
@@ -117,7 +121,7 @@ Complete structural HOCON. Instruction bodies are abridged here to their normati
                 # Frontman: description only — no parameters (client-facing).
                 "description": "Delivery Coordinator: processes a DeliveryEvent JSON through review, testing and promotion gating, returning the decision with full reasoning."
             },
-            "instructions": """You are the Delivery Coordinator of the AI Delivery Intelligence Layer.
+            "instructions": """You are the Delivery Coordinator of the Sentinel.
 The user message is a canonical DeliveryEvent JSON. Execute EXACTLY this pipeline, in order:
 1. Validate the event (required: repo, change.base_sha, change.head_sha, target_transition). If invalid, return a structured error and STOP.
 2. Call change_analysis_agent. Its ChangeProfile is written to sly_data.
@@ -235,7 +239,7 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
                 "description": "Executes the TestPlan from sly_data using the repository's own test runner; writes TestResults to sly_data.",
                 "parameters": { "type": "object", "properties": {}, "required": [] }
             },
-            "class": "delivery_intelligence.test_runner_tool.TestRunnerTool"
+            "class": "sentinel.test_runner_tool.TestRunnerTool"
         },
 
         # ---------- 8. ENVIRONMENT CONTEXT ----------
@@ -284,25 +288,25 @@ Base every fact on tool output. Do not guess line numbers or symbols.""" ${aaosa
         },
 
         # ---------- CODED TOOL DECLARATIONS (leaf tools) ----------
-        { "name": "git_diff",          "class": "delivery_intelligence.git_diff_tool.GitDiffTool",                   "function": ${fn_git_diff} },
-        { "name": "ast_analyzer",      "class": "delivery_intelligence.ast_analyzer_tool.AstAnalyzerTool",           "function": ${fn_ast_analyzer} },
-        { "name": "dependency_graph",  "class": "delivery_intelligence.dependency_graph_tool.DependencyGraphTool",   "function": ${fn_dependency_graph} },
-        { "name": "secret_scanner",    "class": "delivery_intelligence.secret_scanner_tool.SecretScannerTool",       "function": ${fn_secret_scanner} },
-        { "name": "dependency_cve",    "class": "delivery_intelligence.dependency_cve_tool.DependencyCveTool",       "function": ${fn_dependency_cve},
+        { "name": "git_diff",          "class": "sentinel.git_diff_tool.GitDiffTool",                   "function": ${fn_git_diff} },
+        { "name": "ast_analyzer",      "class": "sentinel.ast_analyzer_tool.AstAnalyzerTool",           "function": ${fn_ast_analyzer} },
+        { "name": "dependency_graph",  "class": "sentinel.dependency_graph_tool.DependencyGraphTool",   "function": ${fn_dependency_graph} },
+        { "name": "secret_scanner",    "class": "sentinel.secret_scanner_tool.SecretScannerTool",       "function": ${fn_secret_scanner} },
+        { "name": "dependency_cve",    "class": "sentinel.dependency_cve_tool.DependencyCveTool",       "function": ${fn_dependency_cve},
           "args": { "osv_snapshot_path": "config/osv_snapshot.json" } },
-        { "name": "complexity_metrics","class": "delivery_intelligence.complexity_metrics_tool.ComplexityMetricsTool","function": ${fn_complexity_metrics} },
-        { "name": "report_publisher",  "class": "delivery_intelligence.report_publisher_tool.ReportPublisherTool",   "function": ${fn_report_publisher} },
-        { "name": "test_mapper",       "class": "delivery_intelligence.test_mapper_tool.TestMapperTool",             "function": ${fn_test_mapper} },
-        { "name": "incident_history",  "class": "delivery_intelligence.incident_history_tool.IncidentHistoryTool",   "function": ${fn_incident_history} },
-        { "name": "deploy_window",     "class": "delivery_intelligence.deploy_window_tool.DeployWindowTool",         "function": ${fn_deploy_window} },
-        { "name": "risk_calculator",   "class": "delivery_intelligence.risk_calculator_tool.RiskCalculatorTool",     "function": ${fn_risk_calculator},
+        { "name": "complexity_metrics","class": "sentinel.complexity_metrics_tool.ComplexityMetricsTool","function": ${fn_complexity_metrics} },
+        { "name": "report_publisher",  "class": "sentinel.report_publisher_tool.ReportPublisherTool",   "function": ${fn_report_publisher} },
+        { "name": "test_mapper",       "class": "sentinel.test_mapper_tool.TestMapperTool",             "function": ${fn_test_mapper} },
+        { "name": "incident_history",  "class": "sentinel.incident_history_tool.IncidentHistoryTool",   "function": ${fn_incident_history} },
+        { "name": "deploy_window",     "class": "sentinel.deploy_window_tool.DeployWindowTool",         "function": ${fn_deploy_window} },
+        { "name": "risk_calculator",   "class": "sentinel.risk_calculator_tool.RiskCalculatorTool",     "function": ${fn_risk_calculator},
           "args": { "weights_path": "config/risk_weights_v1.yaml" } },
-        { "name": "trust_ladder",      "class": "delivery_intelligence.trust_ladder_tool.TrustLadderTool",           "function": ${fn_trust_ladder},
+        { "name": "trust_ladder",      "class": "sentinel.trust_ladder_tool.TrustLadderTool",           "function": ${fn_trust_ladder},
           "args": { "policy_path": "config/trust_ladder_policy.yaml" } },
-        { "name": "decision_logger",   "class": "delivery_intelligence.decision_logger_tool.DecisionLoggerTool",     "function": ${fn_decision_logger} },
-        { "name": "cicd_action",       "class": "delivery_intelligence.cicd_action_tool.CicdActionTool",             "function": ${fn_cicd_action} },
-        { "name": "notification",      "class": "delivery_intelligence.notification_tool.NotificationTool",          "function": ${fn_notification} },
-        { "name": "contract_store",    "class": "delivery_intelligence.contract_store_tool.ContractStoreTool",       "function": ${fn_contract_store} }
+        { "name": "decision_logger",   "class": "sentinel.decision_logger_tool.DecisionLoggerTool",     "function": ${fn_decision_logger} },
+        { "name": "cicd_action",       "class": "sentinel.cicd_action_tool.CicdActionTool",             "function": ${fn_cicd_action} },
+        { "name": "notification",      "class": "sentinel.notification_tool.NotificationTool",          "function": ${fn_notification} },
+        { "name": "contract_store",    "class": "sentinel.contract_store_tool.ContractStoreTool",       "function": ${fn_contract_store} }
     ]
 }
 ```
@@ -534,7 +538,7 @@ All contracts: `{"schema_version": "1", "run_id": string, "produced_by": string,
 
 ## 5. Coded Tools (all 17)
 
-Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict, str]`; CPU/blocking work via `asyncio.to_thread`; on failure return `"Error: <reason>"` (never raise through the framework); every tool logs `run_id` from `sly_data["run_id"]`; DB access via `lib/dao.py` (SQLAlchemy engine from `DATABASE_URL`). Constructor kwargs come from the HOCON `args` block.
+Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict, str]`; CPU/blocking work via `asyncio.to_thread`; on failure return `"Error: <reason>"` (never raise through the framework); every tool logs `run_id` from `sly_data["run_id"]`; DB access via `db/dao.py` (SQLAlchemy engine from `DATABASE_URL`). Constructor kwargs come from the HOCON `args` block.
 
 | §    | Tool (module.Class)                                                 | `function.parameters` (args from LLM)                                                                                                                                     | sly_data reads → writes                                                                                          | Core algorithm / notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ---- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
@@ -577,7 +581,7 @@ Common: subclass `neuro_san.interfaces.coded_tool.CodedTool`; implement `async_i
 }
 ```
 
-`NVIDIA_API_KEY` in env. **Self-hosted NIM:** same `class: nvidia` with `base_url: http://nim-llama-33-70b.delivery-intel.svc:8000/v1` — one ConfigMap change, no network edits.
+`NVIDIA_API_KEY` in env. **Self-hosted NIM:** same `class: nvidia` with `base_url: http://nim-llama-33-70b.sentinel.svc:8000/v1` — one ConfigMap change, no network edits.
 
 ### 6.2 `config/custom_llm_info.hocon` — right-sizing slot
 
@@ -585,7 +589,8 @@ Registers the lighter NIM model used by `code_quality_agent` / `environment_cont
 
 ```hocon
 {
-    "nvidia-llama-3.1-8b-instruct": { "class": "nvidia", "max_output_tokens": 8192 }
+    # use_model_name maps the neuro-san key -> the actual NIM model id (required — not a built-in like the 70B/405B keys).
+    "nvidia-llama-3.1-8b-instruct": { "use_model_name": "meta/llama-3.1-8b-instruct", "class": "nvidia", "max_output_tokens": 8192 }
 }
 ```
 
@@ -602,7 +607,7 @@ payload = {
                  "git_token": token, "repo_workspace": ws_path},
     "chat_filter": {"chat_filter_type": "MAXIMAL"},
 }
-# POST {NEURO_SAN_URL}/api/v1/delivery_intelligence/streaming_chat  (chunked JSON stream)
+# POST {NEURO_SAN_URL}/api/v1/sentinel/streaming_chat  (chunked JSON stream)
 # per message: type AGENT_FRAMEWORK(101) → progress event (SSE + persist)
 #              type AI(4)               → final text; parsed `structure` (structure_formats=json)
 #              msg.get("done") is True  → terminal; read allow-listed sly_data
@@ -637,16 +642,16 @@ Hackathon scope ([01 §12](01-proposed-solution.md)): `github.py` implemented; `
 class CicdAdapter(Protocol):
     def verify(self, request) -> bool                       # HMAC-SHA256 (GitHub X-Hub-Signature-256) / GitLab X-Gitlab-Token / Jenkins shared token
     def normalize(self, payload) -> DeliveryEvent           # PR events + promotion (workflow_dispatch / pipeline / build params)
-    def set_gate_status(self, event, state, url) -> None    # Checks API "delivery-intelligence/gate" / commit status / build result
+    def set_gate_status(self, event, state, url) -> None    # Checks API "sentinel/gate" / commit status / build result
     def post_review_comment(self, event, md) -> None        # PR comment / MR note / build description(+PR comment if GitHub-backed)
     def dispatch_promotion(self, event, decision) -> None   # workflow_dispatch → deploy.yml / POST job/…/buildWithParameters / POST projects/:id/trigger/pipeline
 ```
 
 ### 7.4 Pipeline snippets (per platform, condensed; full files in repo)
 
-**GitHub Actions** (`.github/workflows/delivery-intelligence.yml`): on `pull_request`/`workflow_dispatch` → single step `curl -sf -X POST $GW/webhooks/github -H "X-Hub-Signature-256: …" -d @event.json`; branch protection requires check `delivery-intelligence/gate`. Promotion = Gateway dispatches `deploy.yml` with `{environment}` input.
+**GitHub Actions** (`.github/workflows/sentinel.yml`): on `pull_request`/`workflow_dispatch` → single step `curl -sf -X POST $GW/webhooks/github -H "X-Hub-Signature-256: …" -d @event.json`; branch protection requires check `sentinel/gate`. Promotion = Gateway dispatches `deploy.yml` with `{environment}` input.
 **Jenkins** (post-hackathon; `Jenkinsfile` stage): `stage('Delivery Intelligence') { httpRequest POST $GW/webhooks/jenkins …; waitUntil { gate = httpRequest GET $GW/api/v1/runs/$RUN_ID; gate.decision != null } ; error-if hold/escalate-unapproved }`. Promotion = Gateway `buildWithParameters` on the deploy job.
-**GitLab CI** (post-hackathon; `.gitlab-ci.yml` job `delivery_intelligence`): webhook configured project-side (MR events); job polls run status API as above; MR gated by commit status. Promotion = Gateway pipeline-trigger with `TARGET_ENV`.
+**GitLab CI** (post-hackathon; `.gitlab-ci.yml` job `sentinel`): webhook configured project-side (MR events); job polls run status API as above; MR gated by commit status. Promotion = Gateway pipeline-trigger with `TARGET_ENV`.
 
 ## 8. Database Schema (PostgreSQL 16, Alembic-managed)
 
@@ -769,7 +774,7 @@ volumes: { pgdata: {}, workspaces: {} }
 
 | File                            | Object                                                  | Key fields                                                                              |
 | ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `ns.yaml`                       | Namespace `delivery-intel`                              | —                                                                                       |
+| `ns.yaml`                       | Namespace `sentinel`                              | —                                                                                       |
 | `gateway.yaml`                  | Deployment+Service+HPA (2–10)                           | probes `/healthz`; secrets/config mounts                                                |
 | `neuro-san.yaml`                | Deployment+Service+HPA (2–8)                            | env §2.1; RWX workspace mount                                                           |
 | `runner-rbac.yaml`              | ServiceAccount+Role (create/get Jobs)                   | used by `test_runner_tool` in `RUNNER_MODE=k8s`                                         |
@@ -787,7 +792,7 @@ volumes: { pgdata: {}, workspaces: {} }
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Coded tools (unit)    | pytest per tool: golden diffs → expected `change_profile`; planted-secret fixtures; risk formula table-driven (every factor + caps + clamp of negative `llm_escalation`); trust ladder matrix incl. prod-floor + unknown-transition⇒escalate                                                                                                                                                                                                                                                 |
 | Contracts             | JSON-schema validation tests both directions (producer emits valid; consumer rejects invalid)                                                                                                                                                                                                                                                                                                                                                                                                |
-| Network (integration) | Neuro-SAN data-driven fixtures under `tests/fixtures/delivery_intelligence/`, e.g.: `happy_path.hocon` — `{ "agent": "delivery_intelligence", "connections": ["direct"], "timeout_in_seconds": 900, "success_ratio": "1/1", "interactions": [{ "text": "<DeliveryEvent JSON (small clean change)>", "sly_data": {…}, "response": { "structure": { "decision": { "value": "promote" } } } }] }`; `sql_injection_escalates.hocon` asserting `decision=escalate` and keyword `SQL` in reasoning |
+| Network (integration) | Neuro-SAN data-driven fixtures under `tests/fixtures/sentinel/`, e.g.: `happy_path.hocon` — `{ "agent": "sentinel", "connections": ["direct"], "timeout_in_seconds": 900, "success_ratio": "1/1", "interactions": [{ "text": "<DeliveryEvent JSON (small clean change)>", "sly_data": {…}, "response": { "structure": { "decision": { "value": "promote" } } } }] }`; `sql_injection_escalates.hocon` asserting `decision=escalate` and keyword `SQL` in reasoning |
 | Gateway               | FastAPI TestClient: signature verification vectors (valid/invalid/replay), normalization per platform sample payloads, state machine, approval flow, idempotent rerun                                                                                                                                                                                                                                                                                                                        |
 | E2E demo scripts      | `scripts/demo_run_1.sh` / `demo_run_2.sh` → `POST /api/v1/simulate` with recorded payloads against sample repos; asserts final decision + prints dashboard URL                                                                                                                                                                                                                                                                                                                               |
 | Load smoke            | `k6` 20 concurrent simulated runs (LLM stubbed) — state machine & DB contention                                                                                                                                                                                                                                                                                                                                                                                                              |

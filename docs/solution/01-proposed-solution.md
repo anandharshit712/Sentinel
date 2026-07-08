@@ -1,6 +1,6 @@
-# AI Delivery Intelligence Layer — Proposed Solution Specification
+# Sentinel — Proposed Solution Specification
 
-**Project:** AI Delivery Intelligence Layer (Multi-Agent Code Review + Smart Test Selection + Explainable Promotion Gating)
+**Project:** Sentinel (Multi-Agent Code Review + Smart Test Selection + Explainable Promotion Gating)
 **Framework:** Neuro-SAN (sole multi-agent orchestrator)
 **Context:** Cognizant Internal Hackathon
 **Document role:** Master solution specification. This document is the single source of truth for _what the system is and how it works_. The DFD ([02-dfd.md](02-dfd.md)), HLD ([03-hld.md](03-hld.md)), LLD ([04-lld.md](04-lld.md)) and Architecture Diagram ([05-architecture-diagram.md](05-architecture-diagram.md)) are all derived from this document and must not contradict it.
@@ -53,7 +53,7 @@ flowchart LR
         GW["Delivery Gateway<br/>(FastAPI service)"]
     end
     subgraph INTP["2 — Intelligence Plane"]
-        NS["Neuro-SAN Server<br/>agent network:<br/>delivery_intelligence"]
+        NS["Neuro-SAN Server<br/>agent network:<br/>sentinel"]
     end
     subgraph DP["3 — Data & Presentation Plane"]
         PG[("PostgreSQL<br/>Risk History Store")]
@@ -71,16 +71,16 @@ flowchart LR
 | Plane               | Component                                 | Responsibility                                                                                                                                                                                                                     | Technology                                 |
 | ------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Integration         | **Delivery Gateway**                      | Receives webhooks from all three CI/CD platforms, verifies signatures, normalizes payloads into one canonical `DeliveryEvent`, invokes the agent network, exposes the dashboard/approval REST API, executes approved CI/CD actions | Python FastAPI                             |
-| Intelligence        | **`delivery_intelligence` agent network** | All reasoning and decisioning: change analysis, security review, quality review, synthesis, test selection, test execution, environment context, risk scoring, promotion gating                                                    | Neuro-SAN (HOCON) + coded tools (Python)   |
+| Intelligence        | **`sentinel` agent network** | All reasoning and decisioning: change analysis, security review, quality review, synthesis, test selection, test execution, environment context, risk scoring, promotion gating                                                    | Neuro-SAN (HOCON) + coded tools (Python)   |
 | Data & Presentation | **PostgreSQL**                            | Runs, findings, reports, test results, risk scores, decisions, approvals, incidents, audit trail                                                                                                                                   | PostgreSQL 16                              |
 | Data & Presentation | **Decision Dashboard**                    | Review reports, reasoning trails, pending-approval queue with Approve/Reject actions, audit views                                                                                                                                  | Served by Gateway (REST + SSE + static UI) |
 | Data & Presentation | **NSFlow**                                | Live agent-network visualization for demo/debugging (stock Neuro-SAN client)                                                                                                                                                       | nsflow                                     |
 
 **Why a Gateway exists (and why it is thin):** Neuro-SAN's server exposes a chat-style API. CI/CD platforms speak three different webhook dialects and expect three different callback APIs. The Gateway is the _only_ component that knows platform dialects; the agent network sees exactly one canonical event shape. This keeps the network portable across all three platforms with zero HOCON changes (principle D1, D7). The Gateway contains **no intelligence** — no scoring, no selection, no review logic. All of that lives in the Neuro-SAN network.
 
-## 5. The Agent Network — `delivery_intelligence`
+## 5. The Agent Network — `sentinel`
 
-Neuro-SAN loads the network from `registries/delivery_intelligence.hocon` (registered in `registries/manifest.hocon`). One frontman, eight specialist LLM agents, and seventeen deterministic coded tools.
+Neuro-SAN loads the network from `registries/sentinel.hocon` (registered in `registries/manifest.hocon`). One frontman, eight specialist LLM agents, and seventeen deterministic coded tools.
 
 ### 5.1 Network topology
 
@@ -139,7 +139,7 @@ flowchart TD
 
 Solid arrows = Neuro-SAN `tools` references (who may call whom). Dotted arrows = data contracts flowing through the `sly_data` bulletin board (§5.4).
 
-**Naming convention:** coded-tool labels in diagrams/tables use module names; the HOCON tool `name` drops the `_tool` suffix — module `coded_tools/delivery_intelligence/test_runner_tool.py` (class `TestRunnerTool`) is registered as tool `test_runner`. Authoritative mapping: [LLD §3 and §5](04-lld.md).
+**Naming convention:** coded-tool labels in diagrams/tables use module names; the HOCON tool `name` drops the `_tool` suffix — module `coded_tools/sentinel/test_runner_tool.py` (class `TestRunnerTool`) is registered as tool `test_runner`. Authoritative mapping: [LLD §3 and §5](04-lld.md).
 
 ### 5.2 Orchestration model
 
@@ -365,7 +365,7 @@ Every contract carries `schema_version`, `run_id`, `produced_by`, `produced_at`.
 ## 11. End-to-End Data Flow
 
 1. Developer opens a PR / pipeline reaches a promotion stage → platform webhook fires → **Gateway** verifies signature (HMAC/token per platform), normalizes to `DeliveryEvent`, creates the `run` row (Postgres), prepares the workspace (shallow clone at `head_sha`), responds `202 Accepted` to the platform.
-2. Gateway invokes Neuro-SAN `streaming_chat` on `delivery_intelligence` with the event JSON as the message and `{event, run_id, git_token, repo_workspace}` in `sly_data`; streamed agent progress is relayed live to the dashboard (SSE) and persisted.
+2. Gateway invokes Neuro-SAN `streaming_chat` on `sentinel` with the event JSON as the message and `{event, run_id, git_token, repo_workspace}` in `sly_data`; streamed agent progress is relayed live to the dashboard (SSE) and persisted.
 3. **change_analysis_agent** → `change_profile`.
 4. **security_review_agent** + **code_quality_agent** run in parallel → findings.
 5. **review_synthesis_agent** → `review_report`, published to developer (dashboard + PR comment) _in seconds_ — the review deliverable is done here even before tests run.
@@ -384,7 +384,7 @@ The Gateway implements one **adapter interface** (`inbound: webhook→DeliveryEv
 |                  | GitHub Actions                                                                                                                  | Jenkins                                                                    | GitLab CI                                                             |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | Inbound trigger  | `pull_request` / `workflow_dispatch` webhooks (HMAC-SHA256 verified)                                                            | Generic Webhook Trigger plugin POST or pipeline `httpRequest` step (token) | Project webhooks: MR events / pipeline events (secret token)          |
-| Blocking usage   | Required status check `delivery-intelligence/gate` via Checks API                                                               | `input`/gate stage polling Gateway decision endpoint                       | External status via Commit Status API gating MR                       |
+| Blocking usage   | Required status check `sentinel/gate` via Checks API                                                               | `input`/gate stage polling Gateway decision endpoint                       | External status via Commit Status API gating MR                       |
 | Promotion action | `workflow_dispatch` on deploy workflow / Deployments API                                                                        | Trigger parameterized deploy job (`/job/…/buildWithParameters`)            | Trigger pipeline (`POST /projects/:id/trigger/pipeline`) with env var |
 | Review comment   | PR comment via Issues API                                                                                                       | Build description / PR comment via plugin when GitHub-backed               | MR note via Notes API                                                 |
 | Demo mode        | Simulated: Gateway `/api/v1/simulate` endpoint replays recorded webhook payloads — identical code path, no live platform needed |
@@ -435,7 +435,7 @@ AuthN/Z: hackathon = static bearer token; production = OIDC (company SSO) with r
 
 ## 18. Hackathon MVP Scope
 
-1. ✅ Working Neuro-SAN network — all 10 components (§5.3) configured in `registries/delivery_intelligence.hocon`, 17 coded tools implemented.
+1. ✅ Working Neuro-SAN network — all 10 components (§5.3) configured in `registries/sentinel.hocon`, 17 coded tools implemented.
 2. ✅ Sample multi-language repos: `samples/python-payments-service` (Flask + pytest), `samples/node-catalog-service` (Express + Jest) — proving manifest-driven language agnosticism.
 3. ✅ **Demo Run 1 — happy path:** small low-risk change → clean parallel review → small relevant test subset selected & passing → low score → auto-promote (dev→test) with full reasoning trail on the dashboard.
 4. ✅ **Demo Run 2 — the escalation (money shot):** change touching the auth module with planted string-concatenated SQL **and a hardcoded secret** → Security Review flags **two Criticals** → risk 95 (≥75, critical band; §6 worked check) **although every test passes** → gating escalates to human approval, reasoning trail explicitly citing both security findings; approver resolves it live in the dashboard.

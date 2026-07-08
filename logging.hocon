@@ -1,0 +1,65 @@
+# Sentinel logging config (Python dictConfig in HOCON). Wired via AGENT_SERVICE_LOG_JSON.
+# Mirrors the neuro-san-studio structure (structured JSON + LogContextFilter) and adds
+# Sentinel's RedactionFilter (lib/redact.py) on every handler so secrets never reach a sink.
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+
+    "formatters": {
+        "structured": {
+            "format": "{\"message\": \"%(message)s\", \"user_id\": \"%(user_id)s\", \"Timestamp\": \"%(iso_timestamp)s\", \"source\": \"%(source)s\", \"message_type\": \"%(message_type)s\", \"request_id\": \"%(request_id)s\"}"
+        }
+    },
+
+    "filters": {
+        # neuro-san: injects request/context fields the structured formatter references
+        "inject_context": {
+            "()": "neuro_san.service.http.logging.log_context_filter.LogContextFilter"
+        },
+        # Sentinel: scrub secrets from every log message (trust-boundary control)
+        "redact": {
+            "()": "lib.redact.RedactionFilter"
+        }
+    },
+
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "INFO",
+            "formatter": "structured",
+            "filters": ["redact"],
+            "stream": "ext://sys.stdout"
+        },
+        "http_console": {
+            "class": "logging.StreamHandler",
+            "level": "INFO",
+            "formatter": "structured",
+            "filters": ["inject_context", "redact"],
+            "stream": "ext://sys.stdout"
+        }
+    },
+
+    "loggers": {
+        "HttpServer": {
+            "level": "INFO",
+            "handlers": ["http_console"],
+            "propagate": false
+        },
+        # Sentinel coded tools (04 §5) — verbose during dev
+        "coded_tools": {
+            "level": "DEBUG",
+            "handlers": ["console"],
+            "propagate": false
+        },
+        "sentinel": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": false
+        }
+    },
+
+    "root": {
+        "level": "INFO",
+        "handlers": ["console"]
+    }
+}

@@ -1,4 +1,4 @@
-# AI Delivery Intelligence Layer — Design Document Set
+# Sentinel — Design Document Set
 
 Built on **Neuro-SAN** as the sole multi-agent orchestrator. Source problem statement: [../hackathon-delivery-intelligence.md](../hackathon-delivery-intelligence.md).
 

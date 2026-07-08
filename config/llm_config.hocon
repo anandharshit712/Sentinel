@@ -1,0 +1,9 @@
+{
+    # Primary: NVIDIA NIM. Providers without keys are culled automatically.
+    # Included by registries/sentinel.hocon. (04 §6.1)
+    "fallbacks": [
+        { "class": "nvidia", "model_name": "nvidia-llama-3.3-70b-instruct", "temperature": 0.1 },
+        { "model_name": ${?FALLBACK_MODEL_NAME} }     # e.g. gpt-4o / claude-sonnet; line ignored if unset
+    ],
+    "model_name": ${?MODEL_NAME}                       # whole-network override, wins when set
+}

@@ -1,0 +1,34 @@
+# Per-repo Sentinel config. Key under `repos:` = DeliveryEvent.repo.name. (04 §5 config files, §5.63)
+# NOTE: smoke_set test IDs are placeholders until the sample repos are built (Track A prerequisite).
+defaults: &defaults
+  test_timeout_seconds: 900
+  runner_quota: {cpu: "2", mem: "2Gi"}
+  full_suite_override: false
+  timezone: "UTC"                # risky_windows are evaluated in this TZ; change per org
+  risky_windows:                 # cron-like risky deploy windows (deploy_window_tool)
+    - "Fri 16:00-23:59"
+    - "Sat"
+    - "Sun"
+  freeze_dates: []               # e.g. ["2026-12-24", "2026-12-31"]
+
+repos:
+  python-payments-service:
+    <<: *defaults
+    smoke_set:
+      - "tests/test_health.py::test_health_ok"
+    sensitive_rules:
+      - flag: "auth"
+        path_globs: ["**/auth/**", "**/security/**"]
+        symbol_regexes: ["(?i)(authenticate|login|token|password|jwt)"]
+      - flag: "payments"
+        path_globs: ["**/payments/**", "**/billing/**"]
+        symbol_regexes: ["(?i)(charge|refund|payment|card)"]
+
+  node-catalog-service:
+    <<: *defaults
+    smoke_set:
+      - "test/health.test.js"
+    sensitive_rules:
+      - flag: "auth"
+        path_globs: ["**/auth/**"]
+        symbol_regexes: ["(?i)(authenticate|login|token|password|jwt)"]

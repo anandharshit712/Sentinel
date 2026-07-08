@@ -1,4 +1,4 @@
-# AI Delivery Intelligence Layer — Data Flow Diagrams (DFD)
+# Sentinel — Data Flow Diagrams (DFD)
 
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) (authoritative). Companion documents: [HLD](03-hld.md), [LLD](04-lld.md), [Architecture](05-architecture-diagram.md).
 **Levels:** L0 (context) → L1 (system decomposition) → L2 (drill-down of processes 2, 3, 4 and 5).
@@ -21,7 +21,7 @@ Coded-tool names in _italics_ are module names; HOCON tool names drop the `_tool
 
 ## 1. Level 0 — Context Diagram
 
-The system boundary is the **AI Delivery Intelligence Layer** (Gateway + Neuro-SAN `delivery_intelligence` network + Risk History Store + Dashboard). Everything else is external.
+The system boundary is the **Sentinel** (Gateway + Neuro-SAN `sentinel` network + Risk History Store + Dashboard). Everything else is external.
 
 ```mermaid
 flowchart LR
@@ -281,7 +281,7 @@ flowchart TD
     P11("P1.1 Verify Webhook<br/>(HMAC-SHA256 / token, replay window)")
     P12("P1.2 Normalize to DeliveryEvent<br/>(platform adapter, inbound)")
     P13("P1.3 Create Run + Prepare Workspace<br/>(shallow clone @ head_sha)")
-    P14("P1.4 Invoke Agent Network<br/>POST /api/v1/delivery_intelligence/streaming_chat<br/>sly_data: event, run_id, git_token, repo_workspace")
+    P14("P1.4 Invoke Agent Network<br/>POST /api/v1/sentinel/streaming_chat<br/>sly_data: event, run_id, git_token, repo_workspace")
     P15("P1.5 Relay Progress<br/>(stream → SSE + persist)")
 
     P61("P6.1 Queue Escalation")

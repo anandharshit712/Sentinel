@@ -2,7 +2,7 @@
 
 ## Project
 
-**AI Delivery Intelligence Layer** — Cognizant internal hackathon project: multi-agent code review + smart test selection + explainable promotion gating, built on **Neuro-SAN as the sole multi-agent orchestrator**. Currently in **design phase**: documentation is the deliverable; implementation not started.
+**Sentinel** — Cognizant internal hackathon project: multi-agent code review + smart test selection + explainable promotion gating, built on **Neuro-SAN as the sole multi-agent orchestrator**. Currently in **design phase**: documentation is the deliverable; implementation not started.
 
 ## Repo layout
 
@@ -18,7 +18,7 @@
 2. Framework claims must be grounded in `neuro-san-studio/` (docs or code) — no guessed Neuro-SAN behavior. Key refs: `docs/user_guide.md`, `registries/*.hocon`, `coded_tools/`.
 3. Locked design decisions (revisit only if user asks): NVIDIA NIM primary LLM (`nvidia-llama-3.3-70b-instruct`) with fallback chain; PostgreSQL everywhere; K8s production / docker-compose hackathon; GitHub Actions implemented for hackathon, Jenkins + GitLab CI specified as extension contracts and implemented post-hackathon (decided 2026-07-07); Mermaid for all diagrams.
 4. Core design principle in every decision: **LLM reasons, code decides** — risk formula, trust ladder, test execution are deterministic coded tools; LLM may only raise risk, never lower it; staging→production never auto-promotes.
-5. Naming: HOCON coded-tool names drop the `_tool` suffix; module files keep it (`test_runner` ↔ `coded_tools/delivery_intelligence/test_runner_tool.py`, class `TestRunnerTool`).
+5. Naming: HOCON coded-tool names drop the `_tool` suffix; module files keep it (`test_runner` ↔ `coded_tools/sentinel/test_runner_tool.py`, class `TestRunnerTool`).
 
 ## Knowledge graph (graphify)
 

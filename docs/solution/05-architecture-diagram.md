@@ -1,4 +1,4 @@
-# AI Delivery Intelligence Layer — Architecture Diagrams
+# Sentinel — Architecture Diagrams
 
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) · [HLD](03-hld.md) (structure) · [LLD](04-lld.md) (element names). Six views; each states what it shows and the invariants it makes visible. Element names match the LLD exactly.
 
@@ -31,7 +31,7 @@ flowchart TB
     OSV["OSV.dev CVE DB"]
     SLK["Slack / Teams"]
 
-    subgraph SYS["AI Delivery Intelligence Layer"]
+    subgraph SYS["Sentinel"]
         CORE["Gateway + Neuro-SAN network<br/>+ PostgreSQL + Dashboard"]
     end
 
@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph SYSTEM["System containers"]
         GW["Delivery Gateway<br/>FastAPI · :8000<br/>webhooks, adapters, invoker,<br/>REST+SSE, dashboard static"]
-        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: delivery_intelligence<br/>17 coded tools (AGENT_TOOL_PATH)"]
+        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: sentinel<br/>17 coded tools (AGENT_TOOL_PATH)"]
         RUN["Test Runner Sandbox<br/>subprocess (demo) /<br/>ephemeral K8s Job (prod)"]
         NF["NSFlow · :4173<br/>agent visualization"]
         PG[("PostgreSQL 16 · :5432<br/>runs · findings · scores ·<br/>decisions · approvals · audit")]
@@ -69,7 +69,7 @@ flowchart TB
     end
 
     CI -->|"HTTPS webhooks (HMAC/token)"| GW
-    GW -->|"POST /api/v1/delivery_intelligence/streaming_chat"| NS
+    GW -->|"POST /api/v1/sentinel/streaming_chat"| NS
     NS -->|"chat completions (nvidia class)"| NIMX
     NS -->|"spawn + parse results"| RUN
     RUN --- WS
@@ -97,7 +97,7 @@ flowchart TB
 flowchart TD
     GWC["Gateway invoker<br/>(client)"] ==>|"streaming_chat<br/>sly_data: event, run_id,<br/>git_token, repo_workspace"| FM
 
-    subgraph NET["registries/delivery_intelligence.hocon — llm_config: NIM llama-3.3-70b + fallbacks"]
+    subgraph NET["registries/sentinel.hocon — llm_config: NIM llama-3.3-70b + fallbacks"]
         FM["delivery_coordinator<br/><b>frontman</b> · structure_formats: json<br/>allow.to_upstream: run_id, review_report,<br/>test_results, risk_score, decision"]
 
         subgraph STAGE_A["Stage 2–4: understand & review"]
@@ -179,9 +179,9 @@ flowchart TB
 
     subgraph CLUSTER["Kubernetes cluster"]
         subgraph ZONE_EDGE["Edge zone"]
-            ING["Ingress (TLS)<br/>delivery-intel.company.internal"]
+            ING["Ingress (TLS)<br/>sentinel.company.internal"]
         end
-        subgraph NSPACE["namespace: delivery-intel"]
+        subgraph NSPACE["namespace: sentinel"]
             subgraph ZONE_APP["Application zone"]
                 GWP["gateway ×2–10 (HPA)"]
                 NSP["neuro-san ×2–8 (HPA)<br/>AGENT_MAX_CONCURRENT_REQUESTS=50"]
