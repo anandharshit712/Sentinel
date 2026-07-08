@@ -4,7 +4,7 @@ Live tracker derived from [07-implementation-plan.md](docs/solution/07-implement
 
 **Legend:** `[x]` done · `[~]` partial/deferred · `[ ]` not started · `[N/A]` intentionally out of hackathon scope.
 
-**Status @ 2026-07-09:** critical path **M0→M3 complete**; **Track C core live-verified** (`verify_c.py`: simulate→real network→`done`→promote, SSE 49 events, contracts persisted). Next up: **Track D — Dashboard SPA**.
+**Status @ 2026-07-09:** critical path **M0→M3 complete**; **Track C** live-verified; **Track D** built + wire-contract-verified against the live Gateway. Next up: **Phase 6 — integration + demo hardening** (escalate run through Gateway, demo scripts, rehearsal).
 
 ---
 
@@ -16,7 +16,7 @@ Live tracker derived from [07-implementation-plan.md](docs/solution/07-implement
 | **M1**    | Contracts frozen (v1); DB migrates; config loads                                   | `[x]`                                    |
 | **M2**    | Review report from event, headless                                                 | `[x]`                                    |
 | **M3**    | Full pipeline headless, both demo runs                                             | `[x]`                                    |
-| **M4**    | Dashboard renders all screens from mocks                                           | `[ ]`                                    |
+| **M4**    | Dashboard all screens built; wire contract verified vs live Gateway (browser render = 6.2) | `[x]` built |
 | **M5**    | Scripted Demo Runs 1 & 2 green on clean run, twice                                 | `[ ]`                                    |
 
 ---
@@ -65,13 +65,16 @@ Live tracker derived from [07-implementation-plan.md](docs/solution/07-implement
 - [ ] **C3** GitHub adapter (HMAC verify, normalize, gate status, PR comment, dispatch) + webhook route. — _off the demo path (simulate is demo mode); needs 1.6 fixtures_
 - [N/A] **C5** Jenkins + GitLab adapters — **Phase 7** (post-hackathon).
 
-## Track D — Dashboard SPA
+## Track D — Dashboard SPA — ✅ built (M4), wire-verified vs live Gateway
 
-- [ ] **D1** Vite + React + TS + Tailwind + shadcn scaffold, router (5 routes), auth shim, wire types.
-- [ ] **D2** Runs list + shared chips/badges (`BandChip`, `DecisionChip`, `SeverityChip`).
-- [ ] **D3** Run detail cards (ReviewReport, TestPlan, TestResults, RiskScore dial + bars + escalation badge, Decision + trail); StageTimeline.
-- [ ] **D4** SSE hook (`useRunEvents`) + polling fallback; live→durable switchover.
-- [ ] **D5** Approvals queue (mandatory reject comment), Audit, `/runs/compare`. — _D5 compare view is a cut-line item_
+Stack deviation (ponytail, backport note): **plain React 19 + Vite 7 + Tailwind v4 + React Router + `fetch` + native `EventSource`** — dropped shadcn/Recharts/TanStack (06 §3) to cut moving parts; same screens/cards. Dial = inline SVG. `frontend/` (`src/{types,lib,sse,App,RunDetail}.tsx`). `npm run build` clean (250 kB).
+
+- [x] **D1** Vite + React + TS + Tailwind scaffold, router (5 routes), token→role auth shim, wire types (`types.ts`).
+- [x] **D2** Runs list + filters + shared chips (`BandChip`, `DecisionChip`, `SeverityChip`, `StateChip`, `HealthGauge`, `ScoreDial`).
+- [x] **D3** Run detail cards (ReviewReport + FindingsAccordion, TestPlan, TestResults, RiskScore dial + contribution bars + LLM-escalation badge, Decision + 5-section trail + prod-lock chip); StageTimeline.
+- [x] **D4** SSE hook (`useRunEvents`) live→durable switchover (invalidate+refetch on terminal). — _explicit poll-fallback deferred (§6.2); EventSource auto-retry + run row is source of truth_
+- [x] **D5** Approvals queue (mandatory reject comment, gated), Audit table, `/runs/compare` side-by-side.
+- [ ] **M4 visual** — build + wire contract verified against live Gateway (`GET /runs`, `/runs/{id}` shapes match TS exactly); browser render pass pending (do in 6.2).
 
 ## Phase 6 — Integration & Demo Hardening
 
