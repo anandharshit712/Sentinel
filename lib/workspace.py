@@ -40,6 +40,28 @@ def cleanup_workspace(run_id: str) -> None:
     shutil.rmtree(workspace_path(run_id), ignore_errors=True)
 
 
+def run_inputs(sly_data: dict, args: dict | None = None) -> tuple:
+    """Resolve (repo_workspace, base_sha, head_sha, repo_name) for a coded tool.
+
+    Per 04 §5 the change-analysis tools take `args: {}` and read their inputs from the
+    Gateway-seeded sly_data (`event`, `repo_workspace`). `args` may override any field for
+    standalone unit tests. Falls back to the derived workspace path when unset.
+    """
+    args = args or {}
+    event = sly_data.get("event") or {}
+    change = event.get("change") or {}
+    repo = event.get("repo") or {}
+    ws = args.get("repo_path") or sly_data.get("repo_workspace")
+    if not ws and sly_data.get("run_id"):
+        ws = str(workspace_path(sly_data["run_id"]))
+    return (
+        ws,
+        args.get("base_ref") or change.get("base_sha"),
+        args.get("head_ref") or change.get("head_sha"),
+        args.get("repo_name") or repo.get("name"),
+    )
+
+
 def demo() -> None:
     rid = "test-0000-1111"
     p = ensure_workspace(rid)

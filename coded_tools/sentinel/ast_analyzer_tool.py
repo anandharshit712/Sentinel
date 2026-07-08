@@ -14,6 +14,7 @@ import subprocess
 from typing import Any, Dict, List, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.ast_analyzer")
 
@@ -78,11 +79,12 @@ class AstAnalyzerTool(CodedTool):
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         run_id = sly_data.get("run_id", "?")
         try:
-            repo = args["repo_path"]
-            base, head = args["base_ref"], args["head_ref"]
+            repo, base, head, _ = run_inputs(sly_data, args)
             profile = sly_data.get("change_profile_wip")
             if not profile:
                 return "Error: change_profile_wip missing (run git_diff first)"
+            if not (repo and base and head):
+                return "Error: missing repo_workspace/base_sha/head_sha"
 
             new_functions: List[str] = []
             total = 0

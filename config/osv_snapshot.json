@@ -1,0 +1,19 @@
+{
+  "_comment": "Offline OSV advisory snapshot for dependency_cve (hackathon = snapshot-only, live OSV is Phase 7). package -> [advisories]. affected: version specifiers ('*', '<x.y.z', '<=x.y.z', '==x.y.z'); any match => vulnerable.",
+  "requests": [
+    {"id": "CVE-2023-32681", "severity": "medium", "affected": ["<2.31.0"], "fixed": "2.31.0",
+     "cwe": "CWE-200", "summary": "Requests leaks Proxy-Authorization header on redirect."}
+  ],
+  "flask": [
+    {"id": "CVE-2023-30861", "severity": "high", "affected": ["<2.2.5"], "fixed": "2.2.5",
+     "cwe": "CWE-539", "summary": "Flask may cache/serve one client's session cookie to another."}
+  ],
+  "pyyaml": [
+    {"id": "CVE-2020-14343", "severity": "critical", "affected": ["<5.4"], "fixed": "5.4",
+     "cwe": "CWE-20", "summary": "PyYAML full_load arbitrary code execution via crafted YAML."}
+  ],
+  "vulnerable-demo-lib": [
+    {"id": "CVE-2099-0001", "severity": "high", "affected": ["*"], "fixed": "none",
+     "cwe": "CWE-1104", "summary": "Deliberately vulnerable package used in Sentinel tests."}
+  ]
+}

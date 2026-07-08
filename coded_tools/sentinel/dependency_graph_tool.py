@@ -19,6 +19,7 @@ import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
 from lib import contracts
+from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.dependency_graph")
 
@@ -60,12 +61,13 @@ class DependencyGraphTool(CodedTool):
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         run_id = sly_data.get("run_id", "?")
         try:
-            repo = args["repo_path"]
-            head = args.get("head_ref", "HEAD")
-            repo_name = args.get("repo_name")
+            repo, _base, head, repo_name = run_inputs(sly_data, args)
+            head = head or "HEAD"
             profile = sly_data.get("change_profile_wip")
             if not profile:
                 return "Error: change_profile_wip missing (run git_diff first)"
+            if not repo:
+                return "Error: missing repo_workspace"
 
             py_files = [p for p in _git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
                         if p.endswith(".py")]
@@ -100,7 +102,18 @@ class DependencyGraphTool(CodedTool):
                 "transitive": sorted(transitive),
                 "count": len(direct | transitive),
             }
-            profile["sensitive_flags"] = self._sensitive_flags(repo_name, changed_files)
+            flags = self._sensitive_flags(repo_name, changed_files)
+            # merge the LLM's add-only flags (§5.3); LLM can add, never remove detected flags
+            valid_flags = {"auth", "payments", "data_deletion", "migration", "public_api"}
+            known = {f["flag"] for f in flags}
+            for extra in (args.get("added_flags") or []):
+                if extra in valid_flags and extra not in known:
+                    flags.append({"flag": extra, "matched_by": "llm", "files": []})
+                    known.add(extra)
+            profile["sensitive_flags"] = flags
+            # LLM may refine classification (heuristic is the default)
+            if args.get("classification"):
+                profile["classification"] = args["classification"]
 
             wrapped = contracts.wrap(profile, run_id=str(run_id), produced_by="dependency_graph")
             contracts.validate("change_profile", wrapped)
