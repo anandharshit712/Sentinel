@@ -14,7 +14,8 @@ def test_incident_history_returns_7d_and_30d(monkeypatch):
                                                  {"count": 2 if days == 7 else 5,
                                                   "most_recent_at": "2026-07-01T00:00:00+00:00"}))
     out = IncidentHistoryTool().invoke({}, {"run_id": "r", **_EVENT})
-    assert out == {"count_7d": 2, "count_30d": 5, "most_recent_at": "2026-07-01T00:00:00+00:00"}
+    assert out == {"target_env": "staging", "count_7d": 2, "count_30d": 5,
+                   "most_recent_at": "2026-07-01T00:00:00+00:00"}
     assert ("python-payments-service", "staging", 7) in seen
 
 

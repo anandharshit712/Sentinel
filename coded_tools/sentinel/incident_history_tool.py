@@ -26,7 +26,7 @@ class IncidentHistoryTool(CodedTool):
                 return "Error: missing repo/target env (seed sly_data.event or pass args)"
             wk = dao.recent_incidents(repo, env, days=7)
             mo = dao.recent_incidents(repo, env, days=30)
-            out = {"count_7d": wk["count"], "count_30d": mo["count"],
+            out = {"target_env": env, "count_7d": wk["count"], "count_30d": mo["count"],
                    "most_recent_at": mo["most_recent_at"]}
             logger.info("run %s: incident_history %s/%s 7d=%d 30d=%d", run_id, repo, env,
                         out["count_7d"], out["count_30d"])

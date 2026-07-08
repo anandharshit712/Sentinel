@@ -84,9 +84,24 @@ def test_decision_logger_validates_and_persists(monkeypatch):
     assert calls["run_id"] == "r3" and calls["d"]["decision"] == "escalate"
 
 
-def test_decision_logger_rejects_invalid():
-    out = DecisionLoggerTool().invoke({"decision": {"decision": "promote"}}, {"run_id": "r"})
-    assert out.startswith("Error:")  # missing required transition/policy_version/...
+def test_decision_logger_builds_from_sly_data(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(dao, "insert_decision", lambda run_id, d: calls.update(d=d))
+    sly = {"run_id": "r8",
+           "ladder_verdict": {"decision": "escalate", "rule_fired": "qa->staging/critical", "policy_version": "ladder-v1"},
+           "event": {"target_transition": {"from_env": "qa", "to_env": "staging"}},
+           "risk_score": {"score": 80, "band": "critical"},
+           "review_report": {"executive_summary": "1 critical", "counts": {"critical": 1}},
+           "test_results": {"totals": {"passed": 2, "failed": 0}}}
+    out = DecisionLoggerTool().invoke({}, sly)  # no decision arg -> build from sly_data
+    assert out["logged"] is True and out["decision"] == "escalate" and out["approval_required"] is True
+    assert contracts.is_valid("decision", sly["decision"]), contracts.iter_errors("decision", sly["decision"])
+    assert calls["d"]["transition"] == {"from_env": "qa", "to_env": "staging"}
+
+
+def test_decision_logger_errors_without_verdict():
+    out = DecisionLoggerTool().invoke({}, {"run_id": "r"})
+    assert out.startswith("Error:")  # no decision arg and no ladder_verdict
 
 
 def test_cicd_action_simulate_appends_actions_taken(monkeypatch):

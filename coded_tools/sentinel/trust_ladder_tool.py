@@ -59,8 +59,10 @@ class TrustLadderTool(CodedTool):
             if to == "production" and decision != "escalate":
                 decision, rule = "escalate", f"{key}/production-floor"
 
+            verdict = {"decision": decision, "rule_fired": rule, "policy_version": policy_version}
+            sly_data["ladder_verdict"] = verdict  # decision_logger builds the Decision from this in code
             logger.info("run %s: %s band=%s score=%s -> %s (%s)", run_id, key, band, score, decision, rule)
-            return {"decision": decision, "rule_fired": rule, "policy_version": policy_version}
+            return verdict
         except Exception as e:  # never raise through the framework
             return f"Error: {e}"
 
