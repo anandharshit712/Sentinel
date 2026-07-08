@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Set, Union
 import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from lib import contracts
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.test_mapper")
@@ -101,6 +102,11 @@ class TestMapperTool(CodedTool):
                 if tid not in selected:
                     selected[tid] = {"test_id": tid, "reason": "smoke set", "mapping_source": "smoke"}
 
+            # LLM add-only (test_selection_agent may widen); never removes mapper selections.
+            for tid in (args.get("added_test_ids") or []):
+                if tid and tid not in selected:
+                    selected[tid] = {"test_id": tid, "reason": "added by reviewer", "mapping_source": "llm_added"}
+
             sources = {s["mapping_source"] for s in selected.values()}
             confidence = "medium" if sources & {"import_graph", "convention"} else "low"
 
@@ -111,8 +117,14 @@ class TestMapperTool(CodedTool):
                 "estimated_runtime_seconds": len(selected) * _DEFAULT_PER_TEST_SECONDS,
                 "excluded_summary": f"{len(selected)} test file(s) selected by {sorted(sources) or ['none']}",
             }
+            # Finalize into sly_data as the tool-owned test_plan contract (like dependency_graph does
+            # for change_profile) — reliable, and test_runner reads it from sly_data.
+            wrapped = contracts.wrap(plan, run_id=str(run_id), produced_by="test_selection")
+            contracts.validate("test_plan", wrapped)
+            sly_data["test_plan"] = wrapped
             logger.info("run %s: test_mapper selected %d (%s)", run_id, len(selected), confidence)
-            return plan
+            return {"selected": [s["test_id"] for s in selected.values()],
+                    "selection_confidence": confidence, "count": len(selected)}
         except Exception as e:
             return f"Error: {e}"
 

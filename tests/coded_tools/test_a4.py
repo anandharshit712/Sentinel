@@ -16,13 +16,15 @@ def test_mapper_selects_importers_and_smoke():
     sly = {"run_id": "r", "change_profile": {
         "files": [{"path": "app/auth/login.py", "language": "python", "change_type": "modified"}],
         "blast_radius": {"direct": [], "transitive": [], "count": 0}}}
-    plan = TestMapperTool().invoke({"repo_path": SAMPLE, "repo_name": "python-payments-service"}, sly)
-    assert not isinstance(plan, str), plan
-    ids = {s["test_id"]: s for s in plan["selected"]}
+    out = TestMapperTool().invoke({"repo_path": SAMPLE, "repo_name": "python-payments-service"}, sly)
+    assert not isinstance(out, str), out
+    tp = sly["test_plan"]  # mapper finalizes the test_plan contract into sly_data
+    assert contracts.is_valid("test_plan", tp), contracts.iter_errors("test_plan", tp)
+    ids = {s["test_id"]: s for s in tp["selected"]}
     assert ids["tests/test_auth.py"]["mapping_source"] == "import_graph"     # imports app.auth.login
     assert "tests/test_payments.py" in ids                                    # imports app.auth.login too
     assert ids["tests/test_health.py::test_health_ok"]["mapping_source"] == "smoke"
-    assert plan["selection_confidence"] == "medium"
+    assert tp["selection_confidence"] == "medium"
 
 
 def test_runner_executes_pytest_subset_and_parses_results():
