@@ -35,11 +35,13 @@
 
 **Done + pushed (2026-07-08, `06cc5c4`):** **A2** `secret_scanner` (secrets always Critical, entropy heuristic, added-lines only) + `dependency_cve` (offline OSV snapshot `config/osv_snapshot.json`, no network). **A3** `complexity_metrics` (stdlib approx-McCabe delta — no radon dep). **I/O convention aligned to 04 §5:** change-analysis tools take `args:{}`, read `event`+`repo_workspace` from Gateway-seeded sly_data via `lib.workspace.run_inputs` (args override for tests); A1 refactored. `dependency_graph` merges LLM `classification`/`added_flags` (enum-guarded).
 
-**Done, not yet committed (2026-07-08):** **A7 complete** — `contract_store` (sly_data producer-gap fix §9.1, enum-restricted, no DB), `report_publisher` (validates+persists `review_report`), `decision_logger` (validates + transactional decisions/approvals/audit insert), `cicd_action` (SIMULATE_CICD no-op, appends `actions_taken`), `notification` (dashboard row + optional webhook, non-fatal). Added DAO helpers `insert_decision`/`insert_notification`. DB-writing tools unit-tested with DAO monkeypatched (real round-trip = `dao.demo`). Main suite **33 passing**. Zero new runtime deps. **Everything B1+B2 (M2) needs is now built.**
+**Done + pushed (2026-07-08, `92b2c41`):** **A7 complete** — `contract_store` (sly_data producer-gap fix §9.1, enum-restricted, no DB), `report_publisher`, `decision_logger` (transactional decisions/approvals/audit), `cicd_action` (SIMULATE_CICD no-op), `notification` (dashboard + optional webhook, non-fatal). DAO helpers `insert_decision`/`insert_notification`.
+
+**Done, not yet committed (2026-07-08):** **A5** — `incident_history` (7d/30d via `dao.recent_incidents`) + `deploy_window` (risky_windows/freeze_dates/TZ from repo_config, `now` injectable). Main suite **40 passing**. Zero new runtime deps. **Track A now only A4 remaining** (A1/A2/A3/A5/A6/A7 done).
 
 **Next (critical path, [07](docs/solution/07-implementation-plan.md)):**
-1. Finish Track A: **A4** (`test_mapper`, `test_runner` — B3, real pytest subset exec) + **A5** (`incident_history`, `deploy_window` — B4). A6 already done.
-2. Network slices **B1→B4** (`registries/sentinel.hocon` + `registries/manifest.hocon`) → **M2** review report headless → **M3** both demo runs. B1+B2 unblocked now.
+1. **A4** — `test_mapper` (map changed files→tests: coverage-map > import-graph > convention, + smoke_set) + `test_runner` (real pytest subset exec in workspace: `--junitxml`, timeout, env-scrub, parse→`test_results`). Most complex tool; test against the python sample repo.
+2. Network slices **B1→B4** (`registries/sentinel.hocon` + `registries/manifest.hocon`) → **M2** review report headless → **M3** both demo runs. B1+B2 fully unblocked.
 
 Runner note: the studio nsflow GUI is wired to NIM for manual testing (`neuro-san-studio/config/llm_config.hocon` local override; revert with `git -C neuro-san-studio checkout config/llm_config.hocon`).
 
