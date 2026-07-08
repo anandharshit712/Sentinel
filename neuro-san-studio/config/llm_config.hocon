@@ -1,19 +1,12 @@
-# Copyright © 2025-2026 Cognizant Technology Solutions Corp, www.cognizant.com.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# END COPYRIGHT
-
-# By default, use the developer llm_config
-# Worth noting that includes using env var substitution is expressly forbidden by HOCON readers.
-include "developer_llm_config.hocon"
+# Sentinel local test override — run studio samples on NVIDIA NIM (mistral) instead of OpenAI.
+# Reference-clone edit (CLAUDE.md read-only rule); user-requested, reversible:
+#   git -C neuro-san-studio checkout config/llm_config.hocon
+# Form that resolves correctly for NIM in neuro-san: class:nvidia + the RAW model id
+# (a bare model key passed with class is sent unmapped -> 404).
+{
+    "llm_config": {
+        "fallbacks": [
+            { "class": "nvidia", "model_name": "mistralai/mistral-small-4-119b-2603", "temperature": 0.1 }
+        ]
+    }
+}
