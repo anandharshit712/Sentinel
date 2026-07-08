@@ -29,10 +29,11 @@
 
 **Done + pushed:** rename `delivery_intelligence`→`sentinel` (identifier + brand; domain nouns kept); host-native env; DB baseline (13 tables, schema `sentinel`, Alembic `0001`); config files; `lib/contracts.py` (9 contracts) + `redact` + `workspace`; **A6** `risk_calculator` (deterministic `risk-v1`, raise-only LLM escalation) + `trust_ladder` (band→decision, prod hard-floor, fail-closed) with 12 passing tests. `db/` + `lib/` promoted to top-level in 04 §1. Every non-trivial module ships a runnable self-check.
 
+**Done, not yet committed (2026-07-08):** **Framework spike (0.4)** — all 6 assumptions confirmed on `mistralai/mistral-small-4-119b-2603` over HTTP; findings + locked framework facts in [07 §3.1](docs/solution/07-implementation-plan.md). Two LLM-config fixes: `config/llm_config.hocon` form-B raw id + `config/custom_llm_info.hocon` alias→key pattern (`use_model_name` is alias-to-key, not raw id). Coded-tool `function.parameters` types are `string|int|float|boolean|array|object` (not `integer`/`number`) or the network is silently skipped at load. Invoker surface = `SimpleOneShot(connection_type="http")` → `processor.get_structure()/get_sly_data()`. Throwaway spike files deleted.
+
 **Next (critical path, [07](docs/solution/07-implementation-plan.md)):**
-1. **Framework spike** on mistral — validate the AAOSA 9-step pipeline; **apply the form-B LLM-config fix** to `config/llm_config.hocon` (rule 3) before the network first runs.
-2. **A1** coded tools: `git_diff`, `ast_analyzer`, `dependency_graph` (needs the sample repos, 0.3).
-3. Network slices **B1→B4** (`registries/sentinel.hocon`), then gateway (**C**), dashboard (**D**).
+1. **A1** coded tools: `git_diff`, `ast_analyzer`, `dependency_graph` (needs the sample repos, 0.3).
+2. Network slices **B1→B4** (`registries/sentinel.hocon` + `registries/manifest.hocon`), then gateway (**C**), dashboard (**D**).
 
 Runner note: the studio nsflow GUI is wired to NIM for manual testing (`neuro-san-studio/config/llm_config.hocon` local override; revert with `git -C neuro-san-studio checkout config/llm_config.hocon`).
 

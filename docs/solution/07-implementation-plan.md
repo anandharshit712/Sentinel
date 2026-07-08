@@ -50,6 +50,26 @@ After Phase 1, tracks **A/B**, **C**, and **D** are independent and can run in p
 
 **Exit (M0):** `docker compose up` + one curl produces a decision row and JSON response. Spike findings written into the plan/docs; any failed assumption goes back to [01](01-proposed-solution.md) as a design change **before** component fan-out.
 
+### 3.1 Phase 0.4 Spike Findings (2026-07-08, host-native, `mistralai/mistral-small-4-119b-2603`)
+
+Throwaway `spike.hocon` (frontman + one `SpikeProbeTool` numbered pipeline), driven over **HTTP** via `neuro_san.client.simple_one_shot.SimpleOneShot(connection_type="http")`. All six assumptions **confirmed** — none went back to [01](01-proposed-solution.md). Spike files deleted after; config fixes kept.
+
+| # | Assumption | Result |
+| - | ---------- | ------ |
+| a | coded tool reads + writes `sly_data` | ✅ counter/list round-tripped across 3 calls |
+| b | frontman `allow.to_upstream.sly_data` returns keys to HTTP client | ✅ only allow-listed keys reached client; a non-listed key was filtered out |
+| c | `structure_formats: "json"` → parsed `structure` on final AI msg | ✅ `get_structure()` returned the parsed dict (LLM wrapped it in a ```` ```json ```` fence; parser still extracted it) |
+| d | `max_execution_seconds` / `max_steps` / `error_formatter` accepted at network level | ✅ top-level keys; network loaded clean. `error_formatter` valid values `json`/`string` |
+| e | model runs a numbered pipeline with correct tool-call ordering | ✅ mistral held strict `[1,2,3]` at `temperature: 0.1` (de-risks §14 worst case) |
+| f | parallel tool calls | sequential observed; **not required** — pipeline never depends on it |
+
+**Framework facts locked in (feed the real build):**
+- **Client/invoker pattern (Track C):** `SimpleOneShot(agent, connection_type="http", host, port)` → `BasicMessageProcessor.get_answer()` / `.get_structure()` / `.get_sly_data()`. This is the surface [C2](#7-track-c--delivery-gateway-parallel-with-ab) builds on.
+- **Coded-tool `function.parameters` types are `string|int|float|boolean|array|object`** — **not** JSON-Schema `integer`/`number` (`base_model_dictionary_converter.TYPE_LOOKUP`). Wrong type → `pydantic … UndefinedType`, network silently **skipped** at load. Applies to every real tool's param schema.
+- **`use_model_name` is an alias-to-another-key, not a raw model id.** Custom entries need an alias key + a fully-specified key whose *key name* is the raw NIM id (`meta/llama-3.1-8b-instruct`, `mistralai/…-2603`) carrying `class: nvidia`. Pointing an alias straight at a raw id → `No llm entry for model_name …`. **Fixed `config/custom_llm_info.hocon`** to this pattern; both the alias path (`.env MODEL_NAME`) and inline Form B now resolve.
+- **Form-B fix applied to `config/llm_config.hocon`** (raw id `meta/llama-3.3-70b-instruct`, was the unmapped `nvidia-llama-3.3-70b-instruct`).
+- **Headless server run:** `python -m neuro_san.service.main_loop.server_main_loop` reads `AGENT_MANIFEST_FILE` / `AGENT_TOOL_PATH` / `AGENT_LLM_INFO_FILE` / `AGENT_HTTP_PORT` from env but **does not auto-load `.env`** — export it first. Tool class refs resolve `sentinel.<module>.<Class>` under `AGENT_TOOL_PATH=coded_tools`.
+
 ## 4. Phase 1 — Foundations (everything else builds on this)
 
 | #   | Deliverable                                                                                                                                                                                                                                                                               | Definition of done                                                   |
