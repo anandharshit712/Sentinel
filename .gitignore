@@ -3,3 +3,9 @@ graphify-out/
 .graphify_python
 .graphify_*
 /.venv
+
+# secrets & runtime
+.env
+logs/
+__pycache__/
+*.pyc
