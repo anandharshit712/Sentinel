@@ -1,5 +1,6 @@
 # Per-repo Sentinel config. Key under `repos:` = DeliveryEvent.repo.name. (04 §5 config files, §5.63)
-# NOTE: smoke_set test IDs are placeholders until the sample repos are built (Track A prerequisite).
+# NOTE: python-payments-service smoke_set is real (repo built, 0.3). node-catalog-service is still a
+# placeholder — that sample repo is deferred (solo cut-line §13); build it before wiring the node path.
 defaults: &defaults
   test_timeout_seconds: 900
   runner_quota: {cpu: "2", mem: "2Gi"}
