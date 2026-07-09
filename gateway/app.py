@@ -17,9 +17,12 @@ import datetime as _dt
 import json
 import subprocess
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -333,3 +336,18 @@ def resolve_approval(approval_id: int, body: ApprovalResolve,
 @app.get("/api/v1/audit")
 def audit(run_id: str | None = None, _role: str = Depends(_require("viewer"))) -> dict:
     return {"events": dao.list_audit(run_id)}
+
+
+# ---------------------------------------------------------------- SPA (06 §11)
+# Serve the built dashboard from one origin (no CORS) when frontend/dist exists.
+# API routes above win; everything else falls back to index.html for client-side routing.
+_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if (_DIST / "index.html").exists():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa(full_path: str) -> FileResponse:
+        if full_path.startswith(("api/", "healthz")):
+            raise HTTPException(404)
+        f = _DIST / full_path
+        return FileResponse(f if f.is_file() else _DIST / "index.html")

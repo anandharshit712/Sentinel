@@ -43,10 +43,12 @@
 
 **Done, not yet committed (2026-07-09):** **Track D — Dashboard SPA** (`frontend/`, → M4 built). Stack **deviates from 06 §3** (ponytail): plain **React 19 + Vite 7 + Tailwind v4 + React Router + fetch + native EventSource** — dropped shadcn/Recharts/TanStack to cut moving parts; same screens. Files: `src/{types,lib,sse,App,RunDetail}.tsx`. Screens: Runs list (filters + chips), Run detail (StageTimeline SSE + ReviewReport/TestPlan/TestResults/RiskScore-dial+bars+LLM-escalation-badge/Decision+5-section-trail+prod-lock cards), Approvals (mandatory reject comment, RoleGate), Audit, `/runs/compare` side-by-side. Auth = token→role shim. `npm run build` clean (250 kB). **Wire contract verified live**: started Gateway on :8000, `GET /api/v1/runs` + `/runs/{id}` shapes match the TS types exactly (dial 2 contribs, 5-section trail, health gauge). Browser render pass deferred to 6.2. **Note:** Vite 8 (rolldown) native binding breaks on this Windows box → pinned **vite 7** + `@vitejs/plugin-react` 4.
 
-**Next (critical path, [07](docs/solution/07-implementation-plan.md)):** M0–M4 done; all tracks built. Remaining = **Phase 6**:
-1. **6.1/6.2 integration** — escalate (Demo-2) run through the Gateway; cloned-repo run (not just `repo_workspace` override); point SPA at Gateway, browser render + live SSE timeline.
-2. **6.3/6.4** demo scripts + seeded incident + full rehearsal (Run 1 promote, Run 2 escalate→approve live, compare view).
-3. **6.5** batching re-runs (§14) + failure drills; **6.6** README.
+**Done, not yet committed (2026-07-09):** **Phase 6.1 + 6.2 wiring + 6.6.** `verify_c.py` now runs BOTH demo runs through the Gateway and PASSES: happy→promote (risk 1); insecure→escalate (risk 100, 3 criticals) **via real git clone** (no `repo_workspace` override); **approval resolved→approved through the Gateway**; SSE 49 events each. Gateway now **serves the built SPA single-origin** (06 §11: `/`→index, deep-link fallback, `/assets` mount) — open `http://localhost:8000/`. README quickstart + demo runbook added. Gateway tests still 5/5 (48 total).
+
+**Next (critical path, [07](docs/solution/07-implementation-plan.md)):** M0–M4 done; 6.1 done; SPA served. Remaining = **Phase 6 finish**:
+1. **6.2/6.4 in-browser** — open `:8000`, eyeball render + live SSE timeline, rehearse Run 1 promote / Run 2 escalate→approve live / `/runs/compare` (MANUAL — needs a browser).
+2. **6.3** seed an `incidents` row for the score-shift stretch.
+3. **6.5** batching re-runs (§14, re-run `verify_c`/`verify_b4` several times) + failure drills.
 - **Design deviations to backport to 01** (framework-forced, like §9): synthesis/decision in code; tools return data to LLMs; AAOSA for parallel fan-out; frontman one-tool-at-a-time; **Gateway-side contract persistence**; **invoker MAXIMAL filter**; **SPA stack simplification**.
 - **Run servers:** Neuro-SAN `python -m neuro_san.service.main_loop.server_main_loop` (:8080, export `.env` first) · Gateway `PYTHONPATH=. GATEWAY_PORT=8000 python scripts/run_gateway.py` · SPA `cd frontend && npm run dev` (:5173, proxies /api→8000).
 

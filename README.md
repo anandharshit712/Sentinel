@@ -73,11 +73,38 @@ Ten pipeline components: `delivery_coordinator` (frontman) → `change_analysis`
 1. **Happy path** — small clean change → clean review → small test subset passes → low risk → auto-promote (dev→test) with visible reasoning trail.
 2. **The escalation (money shot)** — change touches auth module with planted string-concatenated SQL → Security agent flags **Critical** → risk spikes **although all tests pass** → gate escalates to human approval, reasoning trail citing the finding. Binary CI gating structurally cannot do this.
 
+## Quickstart (host-native dev)
+
+Prereqs: Python 3.12 + `.venv` (neuro-san 0.6.71), local PostgreSQL 17 (schema `sentinel`,
+`DATABASE_URL` in `.env`), Node 20+, an `NVIDIA_API_KEY` in `.env`. Live tracker: [TASKS.md](TASKS.md).
+
+```bash
+# 1. DB schema
+PYTHONPATH=. .venv/Scripts/python -m alembic upgrade head
+
+# 2. Neuro-SAN network server (:8080) — export .env first (it is not auto-loaded)
+PYTHONPATH=. .venv/Scripts/python -m neuro_san.service.main_loop.server_main_loop
+
+# 3. Delivery Gateway (:8000) — REST + SSE + serves the built dashboard
+PYTHONPATH=. GATEWAY_PORT=8000 .venv/Scripts/python scripts/run_gateway.py
+
+# 4. Dashboard: build once, then the Gateway serves it at http://localhost:8000/
+cd frontend && npm install && npm run build      # or `npm run dev` (:5173, proxies /api → :8000)
+```
+
+**Run the demo** (both acceptance runs end to end, prints a `/runs/compare` URL):
+
+```bash
+PYTHONPATH=. .venv/Scripts/python scripts/verify_c.py
+```
+
+Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (48: 43 coded-tool + 5 gateway).
+
 ## Status
 
-- ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md))
-- ✅ Complete design documentation ([docs/solution/](docs/solution/))
-- ⬜ Implementation (agent network HOCON, coded tools, gateway, dashboard, sample repos — fully specified in [LLD](docs/solution/04-lld.md))
+- ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md)) + full design ([docs/solution/](docs/solution/))
+- ✅ **Implementation** (host-native): 17 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`), Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ⬜ Phase 6 hardening + in-browser rehearsal (see [TASKS.md](TASKS.md)).
 
 ## Framework Reference
 

@@ -61,7 +61,7 @@ Live tracker derived from [07-implementation-plan.md](docs/solution/07-implement
 
 - [x] **C1** `gateway/app.py`, `settings.py`, DB wiring, run state machine (`received→analyzing→reviewing→testing→scoring→gated→done|failed`), `POST /api/v1/simulate`, workspace clone + cleanup, idempotent `event_id`. TestClient suite (5) + `scripts/run_gateway.py` launcher.
 - [x] **C2** `gateway/invoker/neuro_san_client.py` — streaming client (MAXIMAL filter), progress→state mapping, `done` + allow-listed sly_data extraction, contracts persisted to DB on finalize, stream-break ⇒ `failed`. Live-verified `scripts/verify_c.py`.
-- [~] **C4** REST + SSE: runs list/detail, `/events` SSE relay (in-memory bus, durable replay), approvals queue + resolve (mandatory reject comment), rerun, audit, token→role auth shim — **done**. Deferred: `/internal/publish-report` + `/internal/cicd-action` (only needed for real CI/CD; `SIMULATE_CICD` no-op covers the demo).
+- [~] **C4** REST + SSE: runs list/detail, `/events` SSE relay (in-memory bus, durable replay), approvals queue + resolve (mandatory reject comment), rerun, audit, token→role auth shim, **SPA static serving + deep-link fallback (06 §11)** — **done**. Deferred: `/internal/publish-report` + `/internal/cicd-action` (only needed for real CI/CD; `SIMULATE_CICD` no-op covers the demo).
 - [ ] **C3** GitHub adapter (HMAC verify, normalize, gate status, PR comment, dispatch) + webhook route. — _off the demo path (simulate is demo mode); needs 1.6 fixtures_
 - [N/A] **C5** Jenkins + GitLab adapters — **Phase 7** (post-hackathon).
 
@@ -78,10 +78,10 @@ Stack deviation (ponytail, backport note): **plain React 19 + Vite 7 + Tailwind 
 
 ## Phase 6 — Integration & Demo Hardening
 
-- [~] **6.1** Gateway ↔ real Neuro-SAN — built directly against the real server (no stub); `verify_c.py` proves state machine advances off real progress markers + allow-listed sly_data arrives + contracts persist. Remaining: run against a **cloned** repo (not just `repo_workspace` override) + insecure/escalate path through the Gateway.
-- [ ] **6.2** Point SPA at real Gateway; SSE live timeline against a real run.
-- [ ] **6.3** `scripts/demo_run_1.sh` / `demo_run_2.sh`; seeded `incidents` row for score-shift.
-- [ ] **6.4** Full rehearsal: Run 1 auto-promote, Run 2 escalate→approve live, `/runs/compare`, NSFlow second screen.
+- [x] **6.1** Gateway ↔ real Neuro-SAN — `verify_c.py` PASS: happy→**promote** (risk 1), insecure→**escalate** (risk 100, 3 criticals) **via real git clone**, approval **resolved→approved** through the Gateway, SSE 49 events each. State machine off real progress markers + allow-listed sly_data + contract persistence all proven.
+- [~] **6.2** SPA served single-origin from the Gateway (06 §11): `GET /`→index, deep-link fallback, `/assets` mounted, API intact. Open **http://localhost:8000/**. Remaining: eyeball render + live SSE timeline in a browser (manual).
+- [~] **6.3** `verify_c.py` doubles as the demo driver (both runs + prints `/runs/compare?a=&b=`). Remaining: seed an `incidents` row for the score-shift stretch.
+- [ ] **6.4** Full rehearsal in-browser: Run 1 auto-promote, Run 2 escalate→approve live, `/runs/compare`, NSFlow second screen.
 - [ ] **6.5** Hardening: log-redaction on real logs, load smoke (LLM stubbed), failure drills (kill NIM key, kill test run). — _cut-line: load smoke_
 - [ ] **6.6** README: quickstart, demo script, architecture pointer.
 
