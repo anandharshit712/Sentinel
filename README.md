@@ -103,6 +103,15 @@ cd frontend && npm install && npm run build      # or `npm run dev` (:5173, prox
 PYTHONPATH=. .venv/Scripts/python scripts/verify_c.py
 ```
 
+**Watch the agent graph animate live** (fires both runs at the running Gateway and prints run
+URLs to open while they stream — `verify_c.py` runs in-process so its live events don't reach
+the server):
+
+```bash
+PYTHONPATH=. .venv/Scripts/python scripts/demo_live.py
+# open the printed http://localhost:8000/runs/<id> immediately
+```
+
 Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (48: 43 coded-tool + 5 gateway).
 
 ## Status
