@@ -188,7 +188,7 @@ def _on_progress(run_id: str, p: dict) -> None:
     text = p.get("text", "")
     if text:
         bus.publish(run_id, {"kind": "agent_message", "text": text[:2000],
-                             "origin": p.get("origin", [])})
+                             "invoked": p.get("invoked", ""), "origin": p.get("origin", [])})
     state = _derive_state(p)
     if state:
         _advance(run_id, state)

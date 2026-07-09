@@ -1,4 +1,4 @@
-import { Link, Route, Routes, useSearchParams } from 'react-router-dom'
+import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 import {
   AuthProvider, useAuth, BandChip, DecisionChip, StateChip, RelativeTime,
   useRuns, useApprovals, useAudit,
@@ -8,42 +8,63 @@ import RunDetailRoute, { RunDetailPane, ApprovalControls } from './RunDetail'
 export default function App() {
   return (
     <AuthProvider>
-      <div className="mx-auto min-h-screen max-w-6xl px-4">
-        <Nav />
-        <main className="py-4">
-          <Routes>
-            <Route path="/" element={<RunsList />} />
-            <Route path="/runs/compare" element={<Compare />} />
-            <Route path="/runs/:id" element={<RunDetailRoute />} />
-            <Route path="/approvals" element={<Approvals />} />
-            <Route path="/audit" element={<Audit />} />
-          </Routes>
-        </main>
-      </div>
+      <Shell>
+        <Routes>
+          <Route path="/" element={<RunsList />} />
+          <Route path="/runs/compare" element={<Compare />} />
+          <Route path="/runs/:id" element={<RunDetailRoute />} />
+          <Route path="/approvals" element={<Approvals />} />
+          <Route path="/audit" element={<Audit />} />
+        </Routes>
+      </Shell>
     </AuthProvider>
   )
 }
 
-function Nav() {
+function Shell({ children }: { children: React.ReactNode }) {
   const { role, token, set } = useAuth()
-  const link = 'text-sm text-zinc-400 hover:text-zinc-100'
+  const nav = ({ isActive }: { isActive: boolean }) =>
+    `text-xs uppercase tracking-widest transition-colors ${isActive ? 'text-[var(--signal)]' : 'text-[var(--ink-dim)] hover:text-[var(--ink)]'}`
   return (
-    <nav className="flex flex-wrap items-center gap-4 border-b border-zinc-800 py-3">
-      <Link to="/" className="font-semibold text-zinc-100">Sentinel</Link>
-      <Link to="/" className={link}>Runs</Link>
-      <Link to="/approvals" className={link}>Approvals</Link>
-      <Link to="/audit" className={link}>Audit</Link>
-      <span className="ml-auto flex items-center gap-2">
-        <select value={role} onChange={e => set(e.target.value as any, token)}
-          className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs" title="demo role (UI gating)">
-          <option value="viewer">viewer</option>
-          <option value="approver">approver</option>
-          <option value="admin">admin</option>
-        </select>
-        <input value={token} onChange={e => set(role, e.target.value)} placeholder="bearer token"
-          className="w-28 rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs" />
-      </span>
-    </nav>
+    <div className="mx-auto min-h-screen max-w-7xl px-5">
+      <nav className="flex flex-wrap items-center gap-5 border-b border-[var(--line)] py-3.5">
+        <Link to="/" className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-[var(--signal)]" style={{ boxShadow: '0 0 8px var(--signal)' }} />
+          <span className="text-base font-bold uppercase tracking-[0.3em] text-[var(--ink-hi)]">Sentinel</span>
+        </Link>
+        <NavLink to="/" end className={nav}>Runs</NavLink>
+        <NavLink to="/approvals" className={nav}>Approvals</NavLink>
+        <NavLink to="/audit" className={nav}>Audit</NavLink>
+        <span className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+          <span className="hidden items-center gap-1.5 sm:flex">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--signal)]" style={{ animation: 'blink 1.4s steps(2) infinite' }} />system live
+          </span>
+          <select value={role} onChange={e => set(e.target.value as any, token)}
+            className="rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--ink)]" title="demo role (UI gating)">
+            <option value="viewer">viewer</option>
+            <option value="approver">approver</option>
+            <option value="admin">admin</option>
+          </select>
+          <input value={token} onChange={e => set(role, e.target.value)} placeholder="token"
+            className="w-24 rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] text-[var(--ink)]" />
+        </span>
+      </nav>
+      <main className="py-5">{children}</main>
+    </div>
+  )
+}
+
+function Select({ k, sp, set }: { k: string; sp: URLSearchParams; set: (k: string, v: string) => void }) {
+  const opts: Record<string, string[]> = {
+    state: ['', 'received', 'reviewing', 'scoring', 'done', 'failed'],
+    band: ['', 'low', 'medium', 'high', 'critical'],
+    decision: ['', 'promote', 'hold', 'escalate'],
+  }
+  return (
+    <select value={sp.get(k) || ''} onChange={e => set(k, e.target.value)}
+      className="rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-xs uppercase tracking-wide text-[var(--ink)]">
+      {opts[k].map(o => <option key={o} value={o}>{o || `all ${k}`}</option>)}
+    </select>
   )
 }
 
@@ -57,35 +78,37 @@ function RunsList() {
   const runs = data?.runs || []
   return (
     <div>
-      <div className="mb-3 flex flex-wrap gap-2">
-        {[['state', ['', 'received', 'reviewing', 'scoring', 'done', 'failed']],
-          ['band', ['', 'low', 'medium', 'high', 'critical']],
-          ['decision', ['', 'promote', 'hold', 'escalate']]].map(([k, opts]) => (
-          <select key={k as string} value={sp.get(k as string) || ''} onChange={e => setFilter(k as string, e.target.value)}
-            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm">
-            {(opts as string[]).map(o => <option key={o} value={o}>{o || `all ${k}`}</option>)}
-          </select>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Select k="state" sp={sp} set={setFilter} />
+        <Select k="band" sp={sp} set={setFilter} />
+        <Select k="decision" sp={sp} set={setFilter} />
+        <span className="ml-auto text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">{runs.length} runs</span>
       </div>
-      {loading && <p className="text-zinc-500">Loading…</p>}
-      <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase text-zinc-500">
-          <tr><th className="py-2">Repo</th><th>Transition</th><th>State</th><th>Band</th><th>Decision</th><th>Created</th></tr>
-        </thead>
-        <tbody>
-          {runs.map(r => (
-            <tr key={r.run_id} className="border-t border-zinc-800 hover:bg-zinc-900/50">
-              <td className="py-2"><Link to={`/runs/${r.run_id}`} className="font-mono text-zinc-200 hover:underline">{r.repo}</Link></td>
-              <td className="text-zinc-400">{r.from_env} → {r.to_env}</td>
-              <td><StateChip s={r.state} /></td>
-              <td><BandChip band={r.band} /></td>
-              <td><DecisionChip d={r.decision} /></td>
-              <td className="text-xs"><RelativeTime t={r.created_at} /></td>
+      <div className="overflow-x-auto rounded-md border border-[var(--line)]">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+              <th className="px-3 py-2.5 font-medium">Repo</th><th className="font-medium">Transition</th>
+              <th className="font-medium">State</th><th className="font-medium">Band</th>
+              <th className="font-medium">Decision</th><th className="px-3 font-medium text-right">Created</th>
             </tr>
-          ))}
-          {!loading && runs.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-zinc-500">No runs.</td></tr>}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {runs.map(r => (
+              <tr key={r.run_id} className="border-b border-[var(--line-soft)] transition-colors hover:bg-[var(--panel-hi)]">
+                <td className="px-3 py-2.5"><Link to={`/runs/${r.run_id}`} className="font-semibold text-[var(--ink-hi)] hover:text-[var(--signal)]">{r.repo}</Link></td>
+                <td className="text-[var(--ink-dim)]">{r.from_env} <span className="text-[var(--signal)]">→</span> {r.to_env}</td>
+                <td><StateChip s={r.state} /></td>
+                <td><BandChip band={r.band} /></td>
+                <td><DecisionChip d={r.decision} /></td>
+                <td className="px-3 text-right"><RelativeTime t={r.created_at} /></td>
+              </tr>
+            ))}
+            {!loading && runs.length === 0 && <tr><td colSpan={6} className="py-10 text-center text-[var(--ink-dim)]">No runs. Run <code className="text-[var(--signal)]">scripts/verify_c.py</code>.</td></tr>}
+            {loading && <tr><td colSpan={6} className="py-10 text-center text-[var(--ink-dim)]">Loading…</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -95,13 +118,13 @@ function Approvals() {
   const rows = data?.approvals || []
   return (
     <div className="space-y-3">
-      <h1 className="text-lg text-zinc-100">Pending approvals</h1>
-      {loading && <p className="text-zinc-500">Loading…</p>}
-      {!loading && rows.length === 0 && <p className="text-zinc-500">Nothing pending.</p>}
+      <h1 className="text-sm font-bold uppercase tracking-widest text-[var(--ink-hi)]">Pending approvals</h1>
+      {loading && <p className="text-[var(--ink-dim)]">Loading…</p>}
+      {!loading && rows.length === 0 && <p className="text-[var(--ink-dim)]">Nothing pending.</p>}
       {rows.map(a => (
-        <div key={a.id} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-          <div className="mb-2 flex items-center gap-3 text-sm">
-            <Link to={`/runs/${a.run_id}`} className="font-mono text-zinc-200 hover:underline">{a.run_id}</Link>
+        <div key={a.id} className="rounded-md border border-[var(--line)] bg-[var(--panel)] p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+            <Link to={`/runs/${a.run_id}`} className="font-semibold text-[var(--ink-hi)] hover:text-[var(--signal)]">{a.run_id}</Link>
             <RelativeTime t={a.created_at} />
           </div>
           <ApprovalControls approvalId={a.id} onResolved={refetch} />
@@ -117,34 +140,38 @@ function Audit() {
   const rows = data?.events || []
   return (
     <div>
-      <h1 className="mb-3 text-lg text-zinc-100">Audit {sp.get('run_id') ? `· ${sp.get('run_id')}` : ''}</h1>
-      {loading && <p className="text-zinc-500">Loading…</p>}
-      <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase text-zinc-500"><tr><th className="py-2">When</th><th>Actor</th><th>Action</th><th>Run</th></tr></thead>
-        <tbody>
-          {rows.map(e => (
-            <tr key={e.id} className="border-t border-zinc-800">
-              <td className="py-2 text-xs"><RelativeTime t={e.at} /></td>
-              <td className="text-zinc-400">{e.actor}</td>
-              <td className="text-zinc-200">{e.action}</td>
-              <td>{e.run_id && <Link to={`/runs/${e.run_id}`} className="font-mono text-xs text-zinc-500 hover:underline">{e.run_id.slice(0, 8)}</Link>}</td>
-            </tr>
-          ))}
-          {!loading && rows.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-zinc-500">No events.</td></tr>}
-        </tbody>
-      </table>
+      <h1 className="mb-3 text-sm font-bold uppercase tracking-widest text-[var(--ink-hi)]">Audit {sp.get('run_id') ? `· ${sp.get('run_id')}` : ''}</h1>
+      <div className="overflow-x-auto rounded-md border border-[var(--line)]">
+        <table className="w-full text-left text-sm">
+          <thead><tr className="border-b border-[var(--line)] text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">
+            <th className="px-3 py-2.5 font-medium">When</th><th className="font-medium">Actor</th><th className="font-medium">Action</th><th className="px-3 font-medium">Run</th></tr></thead>
+          <tbody>
+            {rows.map(e => (
+              <tr key={e.id} className="border-b border-[var(--line-soft)]">
+                <td className="px-3 py-2"><RelativeTime t={e.at} /></td>
+                <td className="text-[var(--ink-dim)]">{e.actor}</td>
+                <td className="text-[var(--ink-hi)]">{e.action}</td>
+                <td className="px-3">{e.run_id && <Link to={`/runs/${e.run_id}`} className="text-[11px] text-[var(--ink-dim)] hover:text-[var(--signal)]">{e.run_id.slice(0, 8)}</Link>}</td>
+              </tr>
+            ))}
+            {!loading && rows.length === 0 && <tr><td colSpan={4} className="py-10 text-center text-[var(--ink-dim)]">No events.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
 
-// F5 demo layout: two run-detail panes side by side (?a=&b=). Pure client composition, no endpoint.
+// F5 demo layout: two run-detail panes side by side (?a=&b=). Pure client composition.
 function Compare() {
   const [sp] = useSearchParams()
   const a = sp.get('a') || '', b = sp.get('b') || ''
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {[a, b].map((id, i) => (
-        <div key={i}>{id ? <RunDetailPane id={id} /> : <p className="text-zinc-500">Set ?a= and ?b= run ids.</p>}</div>
+        <div key={i} className="rounded-md border border-[var(--line-soft)] p-3">
+          {id ? <RunDetailPane id={id} /> : <p className="text-[var(--ink-dim)]">Set ?a= and ?b= run ids.</p>}
+        </div>
       ))}
     </div>
   )

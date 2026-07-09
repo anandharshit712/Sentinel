@@ -1,6 +1,58 @@
 @import "tailwindcss";
 
-/* Dark by default (demo on projector, 06 §8). zinc surface. */
-html { color-scheme: dark; }
-body { margin: 0; background: #09090b; color: #e4e4e7; font: 15px/1.5 system-ui, "Segoe UI", Roboto, sans-serif; }
+/* ============================================================================
+   Sentinel — "mission-control" observability terminal. Dark, phosphor accents,
+   monospace-forward, faint engineering grid. Self-contained (no CDN fonts).
+   ========================================================================== */
+:root {
+  --bg: #06080c;
+  --bg-2: #0a0d13;
+  --panel: rgba(148, 163, 184, 0.04);
+  --panel-hi: rgba(148, 163, 184, 0.07);
+  --line: rgba(148, 163, 184, 0.14);
+  --line-soft: rgba(148, 163, 184, 0.08);
+  --ink: #dbe2ea;
+  --ink-dim: #7c8798;
+  --ink-hi: #f3f6fa;
+  --signal: #35e0c4;      /* live / active phosphor cyan-green */
+  --signal-dim: rgba(53, 224, 196, 0.14);
+  --grid: rgba(120, 140, 170, 0.05);
+}
+
 * { box-sizing: border-box; }
+
+html { color-scheme: dark; }
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(1100px 600px at 80% -10%, rgba(53, 224, 196, 0.06), transparent 60%),
+    radial-gradient(900px 500px at 0% 110%, rgba(56, 130, 246, 0.05), transparent 55%),
+    linear-gradient(0deg, var(--grid) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 28px 100%,
+    var(--bg);
+  font: 14px/1.55 ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: 0.1px;
+}
+
+/* headings / labels: uppercase, tracked — control-room signage */
+.tt { text-transform: uppercase; letter-spacing: 0.14em; }
+
+/* thin custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* focus ring in brand color */
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 var(--signal-dim); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes flow-dash { to { stroke-dashoffset: -16; } }
+@keyframes packet { 0% { offset-distance: 0%; opacity: 0; } 10%,90% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+@keyframes blink { 50% { opacity: 0.35; } }

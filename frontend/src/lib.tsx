@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import type { Band, Decision, Severity, RunState, RunRow, RunDetail, Approval, AuditEvent } from './types'
 
 // ---------------------------------------------------------------- auth (token shim, 06 §9)
-// Demo: a role selector (gates UI only; Gateway enforces server-side) + optional bearer token.
 type Role = 'viewer' | 'approver' | 'admin'
 const RANK: Record<Role, number> = { viewer: 0, approver: 1, admin: 2 }
 const AUTH = { token: sessionStorage.getItem('token') || '', role: (sessionStorage.getItem('role') as Role) || 'approver' }
@@ -66,88 +65,107 @@ export const simulate = (event: unknown, repo_workspace?: string) =>
   api<{ run_id: string }>(`/api/v1/simulate`, { method: 'POST', body: JSON.stringify({ event, repo_workspace }) })
 
 // ---------------------------------------------------------------- semantic colors (06 §8)
-const CHIP = 'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium border'
+const CHIP = 'inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider border'
+const DOT = 'h-1.5 w-1.5 rounded-full'
 const bandCls: Record<Band, string> = {
-  low: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-  medium: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-  high: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
-  critical: 'bg-red-500/15 text-red-300 border-red-500/30',
+  low: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  medium: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+  high: 'bg-orange-500/10 text-orange-300 border-orange-500/30',
+  critical: 'bg-red-500/10 text-red-300 border-red-500/40',
 }
 const decisionCls: Record<Decision, string> = {
-  promote: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-  hold: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
-  escalate: 'bg-red-500/15 text-red-300 border-red-500/30',
+  promote: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  hold: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
+  escalate: 'bg-red-500/10 text-red-300 border-red-500/40',
 }
 const sevCls: Record<Severity, string> = {
-  critical: 'bg-red-500/15 text-red-300 border-red-500/30',
-  high: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
-  medium: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-  low: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
+  critical: 'bg-red-500/10 text-red-300 border-red-500/40',
+  high: 'bg-orange-500/10 text-orange-300 border-orange-500/30',
+  medium: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+  low: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
+}
+const dotColor: Record<string, string> = {
+  low: 'bg-emerald-400', medium: 'bg-amber-400', high: 'bg-orange-400', critical: 'bg-red-400',
+  promote: 'bg-emerald-400', hold: 'bg-slate-400', escalate: 'bg-red-400',
 }
 const stateCls: Record<string, string> = {
-  done: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-  failed: 'bg-red-500/15 text-red-300 border-red-500/30',
+  done: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  failed: 'bg-red-500/10 text-red-300 border-red-500/40',
 }
 export const BAND_HEX: Record<Band, string> = {
   low: '#34d399', medium: '#fbbf24', high: '#fb923c', critical: '#f87171',
 }
 
 export const BandChip = ({ band }: { band?: Band | null }) =>
-  band ? <span className={`${CHIP} ${bandCls[band]}`}>{band}</span> : <span className="text-zinc-500 text-xs">—</span>
+  band ? <span className={`${CHIP} ${bandCls[band]}`}><i className={`${DOT} ${dotColor[band]}`} />{band}</span>
+       : <span className="text-[var(--ink-dim)] text-xs">—</span>
 export const DecisionChip = ({ d }: { d?: Decision | null }) =>
-  d ? <span className={`${CHIP} ${decisionCls[d]}`}>{d}</span> : <span className="text-zinc-500 text-xs">—</span>
+  d ? <span className={`${CHIP} ${decisionCls[d]}`}><i className={`${DOT} ${dotColor[d]}`} />{d}</span>
+    : <span className="text-[var(--ink-dim)] text-xs">—</span>
 export const SeverityChip = ({ s }: { s: Severity }) => <span className={`${CHIP} ${sevCls[s]}`}>{s}</span>
-export const StateChip = ({ s }: { s: RunState }) =>
-  <span className={`${CHIP} ${stateCls[s] || 'bg-blue-500/15 text-blue-300 border-blue-500/30'}`}>
-    {s !== 'done' && s !== 'failed' && <Spinner />}{s}
-  </span>
-
-const Spinner = () => <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-current" />
+export const StateChip = ({ s }: { s: RunState }) => {
+  const live = s !== 'done' && s !== 'failed'
+  return (
+    <span className={`${CHIP} ${stateCls[s] || 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'}`}>
+      {live && <i className={`${DOT} bg-cyan-300`} style={{ animation: 'blink 1s steps(2) infinite' }} />}{s}
+    </span>
+  )
+}
 
 export const RelativeTime = ({ t }: { t?: string | null }) =>
-  <span title={t || ''} className="text-zinc-500">{t ? new Date(t).toLocaleString() : '—'}</span>
+  <span title={t || ''} className="text-[var(--ink-dim)] text-xs">{t ? new Date(t).toLocaleString() : '—'}</span>
 
-// ---------------------------------------------------------------- score dial (SVG, no chart lib)
+// ---------------------------------------------------------------- panel with corner ticks
+export function Card({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
+  const tick = 'pointer-events-none absolute h-2 w-2 border-[var(--signal)]/40'
+  return (
+    <section className="relative rounded-md border border-[var(--line)] bg-[var(--panel)] p-4">
+      <span className={`${tick} left-0 top-0 border-l border-t`} />
+      <span className={`${tick} right-0 top-0 border-r border-t`} />
+      <span className={`${tick} left-0 bottom-0 border-l border-b`} />
+      <span className={`${tick} right-0 bottom-0 border-r border-b`} />
+      <header className="mb-3 flex items-center justify-between border-b border-[var(--line-soft)] pb-2">
+        <h2 className="tt text-[11px] font-semibold text-[var(--ink-dim)]">{title}</h2>
+        {right}
+      </header>
+      {children}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------- score dial (SVG, glow)
 export function ScoreDial({ score, band }: { score: number; band: Band }) {
-  const R = 52, C = 2 * Math.PI * R, frac = Math.max(0, Math.min(100, score)) / 100
+  const R = 54, C = 2 * Math.PI * R, frac = Math.max(0, Math.min(100, score)) / 100
   const hex = BAND_HEX[band]
   return (
-    <svg width="140" height="140" viewBox="0 0 140 140" className="shrink-0" role="img"
+    <svg width="150" height="150" viewBox="0 0 150 150" className="shrink-0" role="img"
          aria-label={`risk score ${score}, band ${band}`}>
-      <circle cx="70" cy="70" r={R} fill="none" stroke="#27272a" strokeWidth="12" />
-      <circle cx="70" cy="70" r={R} fill="none" stroke={hex} strokeWidth="12" strokeLinecap="round"
-              strokeDasharray={C} strokeDashoffset={C * (1 - frac)} transform="rotate(-90 70 70)" />
-      {/* 75 = critical threshold tick */}
-      <line x1="70" y1="12" x2="70" y2="24" stroke="#a1a1aa" strokeWidth="2"
-            transform={`rotate(${360 * 0.75} 70 70)`} />
-      <text x="70" y="66" textAnchor="middle" className="fill-zinc-100" fontSize="30" fontWeight="700">{score}</text>
-      <text x="70" y="88" textAnchor="middle" fill={hex} fontSize="13" fontWeight="600">{band}</text>
+      <circle cx="75" cy="75" r={R} fill="none" stroke="rgba(148,163,184,0.12)" strokeWidth="10" />
+      <circle cx="75" cy="75" r={R} fill="none" stroke={hex} strokeWidth="10" strokeLinecap="round"
+              strokeDasharray={C} strokeDashoffset={C * (1 - frac)} transform="rotate(-90 75 75)"
+              style={{ filter: `drop-shadow(0 0 6px ${hex})`, transition: 'stroke-dashoffset .8s ease' }} />
+      <line x1="75" y1="15" x2="75" y2="27" stroke="#e5e7eb" strokeWidth="2" strokeOpacity="0.5"
+            transform="rotate(270 75 75)" />
+      <text x="75" y="72" textAnchor="middle" className="fill-[var(--ink-hi)]" fontSize="34" fontWeight="700"
+            fontFamily="ui-monospace, monospace">{score}</text>
+      <text x="75" y="94" textAnchor="middle" fill={hex} fontSize="12" fontWeight="700"
+            letterSpacing="2" style={{ textTransform: 'uppercase' }}>{band}</text>
     </svg>
   )
 }
 
 export function HealthGauge({ value }: { value?: number }) {
-  if (value == null) return <span className="text-zinc-500">—</span>
+  if (value == null) return <span className="text-[var(--ink-dim)]">—</span>
   const c = value >= 75 ? '#34d399' : value >= 50 ? '#fbbf24' : '#f87171'
   return (
     <div className="flex items-center gap-2">
-      <div className="h-2 w-32 rounded bg-zinc-800">
-        <div className="h-2 rounded" style={{ width: `${value}%`, background: c }} />
+      <div className="h-1.5 w-32 rounded-full bg-[rgba(148,163,184,0.12)]">
+        <div className="h-1.5 rounded-full" style={{ width: `${value}%`, background: c, boxShadow: `0 0 6px ${c}` }} />
       </div>
-      <span className="text-sm font-semibold" style={{ color: c }}>{value}</span>
+      <span className="text-sm font-bold tabular-nums" style={{ color: c }}>{value}</span>
     </div>
   )
 }
-
-export const Card = ({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) => (
-  <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4">
-    <header className="mb-3 flex items-center justify-between">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">{title}</h2>
-      {right}
-    </header>
-    {children}
-  </section>
-)
 
 export const STAGES: RunState[] = ['received', 'analyzing', 'reviewing', 'testing', 'scoring', 'gated', 'done']
 export const stageRank = (s: RunState) => STAGES.indexOf(s)

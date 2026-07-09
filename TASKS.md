@@ -74,7 +74,9 @@ Stack deviation (ponytail, backport note): **plain React 19 + Vite 7 + Tailwind 
 - [x] **D3** Run detail cards (ReviewReport + FindingsAccordion, TestPlan, TestResults, RiskScore dial + contribution bars + LLM-escalation badge, Decision + 5-section trail + prod-lock chip); StageTimeline.
 - [x] **D4** SSE hook (`useRunEvents`) live→durable switchover (invalidate+refetch on terminal). — _explicit poll-fallback deferred (§6.2); EventSource auto-retry + run row is source of truth_
 - [x] **D5** Approvals queue (mandatory reject comment, gated), Audit table, `/runs/compare` side-by-side.
-- [ ] **M4 visual** — build + wire contract verified against live Gateway (`GET /runs`, `/runs/{id}` shapes match TS exactly); browser render pass pending (do in 6.2).
+- [x] **D-redesign** — "mission-control / observability" restyle (dark, phosphor-cyan accent, mono-forward, engineering-grid backdrop, panels with corner ticks, glowing risk dial). Self-contained (no CDN fonts).
+- [x] **D-agentgraph** — **live agent-network graph** (`AgentGraph.tsx`): full topology from `sentinel.hocon` (frontman → 9 stages → sub-tools) with nodes lighting up + data-flow packets animating as SSE streams. Gateway SSE now carries `invoked`; verified 43-event sequence maps to graph node ids exactly.
+- [ ] **M4 visual** — build + wire contract verified against live Gateway; browser render pass pending (do in 6.2).
 
 ## Phase 6 — Integration & Demo Hardening
 
