@@ -213,16 +213,56 @@ function ReviewReportCard({ r }: { r: NonNullable<RD['review_report']> }) {
 
 function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
   const t = r.totals || { passed: 0, failed: 0, skipped: 0 }
+  const total = r.suite_total ?? 0
+  const executed = r.executed ?? (t.passed + t.failed + t.skipped + (t.errors || 0))
+  const excluded = r.excluded ?? Math.max(0, total - executed)
+  const savedPct = total > 0 ? Math.round((excluded / total) * 100) : 0
+  const subset = r.selection_mode === 'subset'
+  const modeChip = r.selection_mode && (
+    <span className={`inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-[10px] uppercase tracking-wider border ${
+      subset ? 'border-[var(--signal)]/40 bg-[var(--signal-dim)] text-[var(--signal)]'
+             : 'border-amber-500/40 bg-amber-500/10 text-amber-300'}`}>
+      {subset ? '◇ smart subset' : '◆ full suite · no mapping'}
+    </span>
+  )
+  const statusColor: Record<string, string> = { passed: 'bg-emerald-400', failed: 'bg-red-400', error: 'bg-red-400', skipped: 'bg-slate-500' }
   return (
-    <Card title="Test Results" right={<code className="text-[10px] text-[var(--ink-dim)]">{r.runner}</code>}>
+    <Card title="Test Results · Selection" right={modeChip}>
+      {total > 0 && (
+        <div className="mb-3">
+          <div className="mb-1 flex items-baseline justify-between">
+            <span className="text-2xl font-bold tabular-nums text-[var(--ink-hi)]">
+              {executed}<span className="text-[var(--ink-dim)] text-base"> / {total}</span>
+              <span className="ml-2 text-xs font-normal uppercase tracking-wide text-[var(--ink-dim)]">tests run</span>
+            </span>
+            <span className="text-sm font-semibold text-[var(--signal)]">{excluded} excluded · {savedPct}% skipped</span>
+          </div>
+          {/* selected vs excluded bar */}
+          <div className="flex h-2 overflow-hidden rounded-full bg-[rgba(148,163,184,0.1)]">
+            <div style={{ width: `${total ? (executed / total) * 100 : 0}%`, background: 'var(--signal)', boxShadow: '0 0 6px var(--signal)' }} />
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap gap-4 text-sm">
         <span className="text-emerald-300">▪ {t.passed} passed</span>
         <span className={t.failed ? 'text-red-300' : 'text-[var(--ink-dim)]'}>▪ {t.failed} failed</span>
         <span className="text-[var(--ink-dim)]">▪ {t.skipped} skipped</span>
         {r.timed_out && <span className="text-red-300">timed out</span>}
-        {r.duration_seconds != null && <span className="ml-auto text-[var(--ink-dim)]">{r.duration_seconds}s</span>}
+        {r.duration_seconds != null && <span className="ml-auto text-[var(--ink-dim)]">{r.duration_seconds}s · {r.runner}</span>}
       </div>
-      {r.command && <code className="mt-2 block truncate text-[10px] text-[var(--ink-dim)]">{r.command}</code>}
+      {r.cases && r.cases.length > 0 && (
+        <ul className="mt-3 max-h-44 space-y-1 overflow-auto border-t border-[var(--line-soft)] pt-2">
+          {r.cases.map((c, i) => (
+            <li key={i} className="flex items-center gap-2 text-[11px]">
+              <i className={`h-1.5 w-1.5 rounded-full ${statusColor[c.status] || 'bg-slate-500'}`} />
+              <code className="text-[var(--ink)]">{c.test_id}</code>
+              <span className="ml-auto text-[var(--ink-dim)]">{c.duration_ms}ms</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {r.stage_failure && <p className="mt-2 text-[11px] text-amber-300">⚠ {r.stage_failure}</p>}
+      {r.command && <code className="mt-2 block truncate text-[10px] text-[var(--ink-dim)]" title={r.command}>{r.command}</code>}
     </Card>
   )
 }

@@ -44,6 +44,20 @@ def _detect_runner(repo: str) -> str:
     return "none_detected"
 
 
+def _collect_total(repo: str, env: Dict[str, str], timeout: int) -> int:
+    """Total tests pytest would collect for the WHOLE suite — the denominator for selection."""
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q",
+                            "-p", "no:cacheprovider"], cwd=repo, env=env,
+                           capture_output=True, text=True, timeout=min(timeout, 120), check=False)
+        m = re.search(r"(\d+)\s+tests?\s+collected", r.stdout)
+        if m:
+            return int(m.group(1))
+        return sum(1 for ln in r.stdout.splitlines() if "::" in ln)
+    except Exception:
+        return 0
+
+
 def _parse_junit(path: str) -> tuple:
     totals = {"passed": 0, "failed": 0, "skipped": 0, "errors": 0}
     cases: List[Dict[str, Any]] = []
@@ -90,13 +104,18 @@ class TestRunnerTool(CodedTool):
                     "stage_failure": f"runner {runner} not supported yet"})
 
             timeout = self._timeout(repo_name)
+            env = _scrubbed_env()
+            suite_total = _collect_total(repo, env, timeout)
+            # Selection story: run only the mapped ids; if nothing mapped, fall back to the full
+            # suite but LABEL it honestly (never silently "select" everything).
+            selection_mode = "subset" if ids else "full_suite_fallback"
             fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-")
             os.close(fd)
             cmd = [sys.executable, "-m", "pytest", *ids,
                    "--junitxml", xml_path, "-q", "-p", "no:cacheprovider"]
             start = time.perf_counter()
             try:
-                subprocess.run(cmd, cwd=repo, env=_scrubbed_env(), capture_output=True,
+                subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
                                text=True, timeout=timeout, check=False)
                 timed_out = False
             except subprocess.TimeoutExpired:
@@ -104,7 +123,9 @@ class TestRunnerTool(CodedTool):
             elapsed = round(time.perf_counter() - start, 3)
 
             payload: Dict[str, Any] = {"runner": "pytest", "command": " ".join(cmd),
-                                       "duration_seconds": elapsed, "timed_out": timed_out}
+                                       "duration_seconds": elapsed, "timed_out": timed_out,
+                                       "suite_total": suite_total, "selection_mode": selection_mode,
+                                       "selected_ids": ids}
             if timed_out:
                 payload.update(totals={"passed": 0, "failed": 0, "skipped": 0}, cases=[],
                                stage_failure=f"test run exceeded {timeout}s")
@@ -114,6 +135,9 @@ class TestRunnerTool(CodedTool):
             else:
                 payload.update(totals={"passed": 0, "failed": 0, "skipped": 0}, cases=[],
                                stage_failure="no JUnit output (runner crashed)")
+            executed = sum(payload["totals"].values())
+            payload["executed"] = executed
+            payload["excluded"] = max(0, suite_total - executed)
             os.unlink(xml_path)
             return self._store(sly_data, run_id, payload)
         except Exception as e:

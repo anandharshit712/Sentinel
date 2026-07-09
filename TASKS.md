@@ -72,6 +72,7 @@ Stack deviation (ponytail, backport note): **plain React 19 + Vite 7 + Tailwind 
 - [x] **D1** Vite + React + TS + Tailwind scaffold, router (5 routes), token→role auth shim, wire types (`types.ts`).
 - [x] **D2** Runs list + filters + shared chips (`BandChip`, `DecisionChip`, `SeverityChip`, `StateChip`, `HealthGauge`, `ScoreDial`).
 - [x] **D3** Run detail cards (ReviewReport + FindingsAccordion, TestPlan, TestResults, RiskScore dial + contribution bars + LLM-escalation badge, Decision + 5-section trail + prod-lock chip); StageTimeline.
+- [x] **Test-selection visibility** (2026-07-09) — `test_runner` now records `suite_total` (pytest `--collect-only`), `executed`, `excluded`, `selection_mode` (`subset` | `full_suite_fallback`, honest empty-plan label). TestResults card shows **"ran N / TOTAL · M excluded"** + selection-mode chip + per-test case list. `scripts/demo_selection.py` proves it live: change beta.py → **ran 2 of 6, excluded 4**. Unit-tested (A4: subset 4/6 + empty→full-fallback). 49 tests.
 - [x] **D4** SSE hook (`useRunEvents`) live→durable switchover (invalidate+refetch on terminal). — _explicit poll-fallback deferred (§6.2); EventSource auto-retry + run row is source of truth_
 - [x] **D5** Approvals queue (mandatory reject comment, gated), Audit table, `/runs/compare` side-by-side.
 - [x] **D-redesign** — "mission-control / observability" restyle (dark, phosphor-cyan accent, mono-forward, engineering-grid backdrop, panels with corner ticks, glowing risk dial). Self-contained (no CDN fonts).

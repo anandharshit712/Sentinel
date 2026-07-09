@@ -55,9 +55,15 @@ export interface TestResults {
   runner?: string
   command?: string
   totals?: { passed: number; failed: number; skipped: number; errors?: number }
-  cases?: { test_id: string; status: string; duration_ms?: number }[]
+  cases?: { test_id: string; status: string; duration_ms?: number; failure_message?: string }[]
   timed_out?: boolean
   duration_seconds?: number
+  suite_total?: number          // total tests pytest would collect for the whole suite
+  executed?: number             // tests actually run (the selected subset)
+  excluded?: number             // suite_total - executed (tests skipped by selection)
+  selection_mode?: 'subset' | 'full_suite_fallback'
+  selected_ids?: string[]
+  stage_failure?: string
 }
 
 export interface TestPlan {

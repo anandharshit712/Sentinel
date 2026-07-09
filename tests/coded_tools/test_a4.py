@@ -36,5 +36,20 @@ def test_runner_executes_pytest_subset_and_parses_results():
     assert out["runner"] == "pytest"
     assert out["totals"]["passed"] >= 4 and out["totals"]["failed"] == 0  # 3 auth + 1 health
     assert out["timed_out"] is False
+    # selection visibility: ran a SUBSET of the 6-test suite, with a denominator
+    assert out["selection_mode"] == "subset"
+    assert out["suite_total"] == 6
+    executed = sum(out["totals"].values())
+    assert out["executed"] == executed and out["executed"] < out["suite_total"]
+    assert out["excluded"] == out["suite_total"] - executed  # 6 - 4 = 2 skipped by selection
     assert contracts.is_valid("test_results", sly["test_results"]), \
         contracts.iter_errors("test_results", sly["test_results"])
+
+
+def test_runner_empty_plan_is_labeled_full_suite_fallback():
+    """No mapped tests -> run the whole suite, but honestly labeled (never silent 'selection')."""
+    sly = {"run_id": "r", "test_plan": {"selected": [], "smoke_set": []}}
+    out = TestRunnerTool().invoke({"repo_path": SAMPLE}, sly)
+    assert not isinstance(out, str), out
+    assert out["selection_mode"] == "full_suite_fallback"
+    assert out["suite_total"] == 6 and out["executed"] == 6 and out["excluded"] == 0
