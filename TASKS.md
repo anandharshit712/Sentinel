@@ -80,10 +80,10 @@ Stack deviation (ponytail, backport note): **plain React 19 + Vite 7 + Tailwind 
 
 - [x] **6.1** Gateway ↔ real Neuro-SAN — `verify_c.py` PASS: happy→**promote** (risk 1), insecure→**escalate** (risk 100, 3 criticals) **via real git clone**, approval **resolved→approved** through the Gateway, SSE 49 events each. State machine off real progress markers + allow-listed sly_data + contract persistence all proven.
 - [~] **6.2** SPA served single-origin from the Gateway (06 §11): `GET /`→index, deep-link fallback, `/assets` mounted, API intact. Open **http://localhost:8000/**. Remaining: eyeball render + live SSE timeline in a browser (manual).
-- [~] **6.3** `verify_c.py` doubles as the demo driver (both runs + prints `/runs/compare?a=&b=`). Remaining: seed an `incidents` row for the score-shift stretch.
-- [ ] **6.4** Full rehearsal in-browser: Run 1 auto-promote, Run 2 escalate→approve live, `/runs/compare`, NSFlow second screen.
-- [ ] **6.5** Hardening: log-redaction on real logs, load smoke (LLM stubbed), failure drills (kill NIM key, kill test run). — _cut-line: load smoke_
-- [ ] **6.6** README: quickstart, demo script, architecture pointer.
+- [x] **6.3** `verify_c.py` is the demo driver (both runs + prints `/runs/compare?a=&b=`); `scripts/seed_demo.py` seeds incidents for the env-context/score-shift factor (idempotent).
+- [ ] **6.4** Full rehearsal **in-browser** (needs a human): open `:8000` → Run 1 auto-promote, Run 2 escalate→approve live, `/runs/compare`, NSFlow second screen.
+- [~] **6.5** Batching stability (§14): `verify_c` **3/3 consecutive PASS** through the Gateway (no parallel-tool-call regression) — one-tool-at-a-time rule holds. Remaining (cut-line): failure drills (kill NIM key → fallback/`stage_failure`; kill test run → timeout), log-redaction on real logs, load smoke.
+- [x] **6.6** README: host-native quickstart + one-command demo (`verify_c.py`) + status.
 
 ## Phase 7 — Production Track (post-hackathon)
 
