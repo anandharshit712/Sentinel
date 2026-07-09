@@ -82,8 +82,8 @@ Prereqs: Python 3.12 + `.venv` (neuro-san 0.6.71), local PostgreSQL 17 (schema `
 # 1. DB schema
 PYTHONPATH=. .venv/Scripts/python -m alembic upgrade head
 
-# 2. Neuro-SAN network server (:8080) — export .env first (it is not auto-loaded)
-PYTHONPATH=. .venv/Scripts/python -m neuro_san.service.main_loop.server_main_loop
+# 2. Neuro-SAN network server (:8080) — wrapper loads .env (stock server does not)
+PYTHONPATH=. .venv/Scripts/python scripts/run_server.py
 
 # 3. Delivery Gateway (:8000) — REST + SSE + serves the built dashboard
 PYTHONPATH=. GATEWAY_PORT=8000 .venv/Scripts/python scripts/run_gateway.py
