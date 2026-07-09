@@ -3,6 +3,8 @@
 # placeholder — that sample repo is deferred (solo cut-line §13); build it before wiring the node path.
 defaults: &defaults
   test_timeout_seconds: 900
+  install_deps: false            # opt-in per repo: build a per-run venv + pip install the repo's
+  install_timeout_seconds: 600   # deps (runs the repo's build backend — see _prepare_venv note)
   runner_quota: {cpu: "2", mem: "2Gi"}
   full_suite_override: false
   timezone: "UTC"                # risky_windows are evaluated in this TZ; change per org
@@ -24,6 +26,14 @@ repos:
       - flag: "payments"
         path_globs: ["**/payments/**", "**/billing/**"]
         symbol_regexes: ["(?i)(charge|refund|payment|card)"]
+
+  # Real external monorepo (deps not in the Gateway env). Just opt into per-run install —
+  # test_runner auto-scans the tree for Python project dirs (no need to list them). Set
+  # test_project_dirs only to override auto-detection.
+  anandharshit712/ORION:
+    <<: *defaults
+    install_deps: true
+    install_timeout_seconds: 900
 
   node-catalog-service:
     <<: *defaults

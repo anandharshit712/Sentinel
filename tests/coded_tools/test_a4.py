@@ -4,8 +4,26 @@ import os
 import pytest
 
 from coded_tools.sentinel.test_mapper_tool import TestMapperTool
-from coded_tools.sentinel.test_runner_tool import TestRunnerTool
+from coded_tools.sentinel.test_runner_tool import TestRunnerTool, _detect_runner, _project_dirs
 from lib import contracts
+
+
+def test_monorepo_detection_auto_scans_at_any_depth(tmp_path):
+    """Auto-scan finds Python project dirs anywhere (like ORION), prunes junk, no config needed."""
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "pyproject.toml").write_text("[project]\nname='x'\n")
+    (tmp_path / "backend" / "pkg").mkdir()  # sub-package: must NOT be listed separately
+    (tmp_path / "backend" / "pkg" / "pyproject.toml").write_text("[project]\nname='y'\n")
+    (tmp_path / "services" / "sdk").mkdir(parents=True)  # nested 2 levels deep
+    (tmp_path / "services" / "sdk" / "requirements.txt").write_text("pytest\n")
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "frontend" / "package.json").write_text("{}")  # no py marker -> excluded
+    (tmp_path / "node_modules" / "junk").mkdir(parents=True)
+    (tmp_path / "node_modules" / "junk" / "setup.py").write_text("")  # pruned, must be ignored
+    repo = str(tmp_path)
+    assert _detect_runner(repo) == "pytest"
+    assert set(_project_dirs(repo, None)) == {"backend", "services/sdk"}  # not backend/pkg, not node_modules
+    assert _project_dirs(repo, ["backend"]) == ["backend"]                # config override still wins
 
 SAMPLE = os.path.abspath("samples/python-payments-service")
 

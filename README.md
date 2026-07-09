@@ -114,10 +114,30 @@ PYTHONPATH=. .venv/Scripts/python scripts/demo_live.py
 
 Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (48: 43 coded-tool + 5 gateway).
 
+## Running on real repos
+
+Full step-by-step (localhost + public-URL paths, real tests, troubleshooting): **[RUNNING_ON_REPOS.md](RUNNING_ON_REPOS.md)**. Quickest try against any public repo:
+
+```powershell
+$env:PYTHONPATH="."; .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo
+```
+
+### GitHub Action gate
+
+Gate any repo's PRs on Sentinel's decision with [`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml) — copy it into the target repo's `.github/workflows/`. On each PR it builds a `github`-source DeliveryEvent and `POST`s it to `/api/v1/simulate`; the Gateway clones the repo server-side, runs the pipeline, and returns a decision. The check **fails unless the decision is `promote`** (escalate/hold block the merge until reviewed in the dashboard).
+
+No new backend — it reuses the same `simulate` endpoint the demo uses. Two repo secrets:
+
+- `SENTINEL_GATEWAY_URL` — a reachable Gateway base URL. For local dev, tunnel it: `cloudflared tunnel --url http://localhost:8000`.
+- `SENTINEL_TOKEN` — an admin token from the Gateway's `API_TOKENS` (`simulate` is admin-only).
+
+Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gate represents (default `dev → test`). Limitations: same-repo PRs only (the Gateway clones `repo.url`, so a fork's head SHA isn't reachable — fork PRs are skipped).
+
 ## Status
 
 - ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md)) + full design ([docs/solution/](docs/solution/))
 - ✅ **Implementation** (host-native): 17 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`), Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ✅ GitHub Action gate for real repos ([`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml)) — PRs post to `/api/v1/simulate`, check fails unless `promote`.
 - ⬜ Phase 6 hardening + in-browser rehearsal (see [TASKS.md](TASKS.md)).
 
 ## Framework Reference
