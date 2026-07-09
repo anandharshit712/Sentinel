@@ -78,9 +78,14 @@ Ten pipeline components: `delivery_coordinator` (frontman) → `change_analysis`
 Prereqs: Python 3.12 + `.venv` (neuro-san 0.6.71), local PostgreSQL 17 (schema `sentinel`,
 `DATABASE_URL` in `.env`), Node 20+, an `NVIDIA_API_KEY` in `.env`. Live tracker: [TASKS.md](TASKS.md).
 
+**One command (Windows):** `.\run.ps1` — migrates the DB, builds the dashboard, starts both
+servers, opens http://localhost:8000/. Flags: `-Demo` (run both demo runs after startup),
+`-Fresh` (rebuild UI), `-OneWindow` (both servers in this terminal), `-Stop` (kill them).
+The manual steps below are the equivalent, one process at a time.
+
 ```bash
 # 1. DB schema
-PYTHONPATH=. .venv/Scripts/python -m alembic upgrade head
+PYTHONPATH=. .venv/Scripts/python -m alembic -c db/alembic.ini upgrade head
 
 # 2. Neuro-SAN network server (:8080) — wrapper loads .env (stock server does not)
 PYTHONPATH=. .venv/Scripts/python scripts/run_server.py
