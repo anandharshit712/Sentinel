@@ -6,20 +6,64 @@ type Role = 'viewer' | 'approver' | 'admin'
 const RANK: Record<Role, number> = { viewer: 0, approver: 1, admin: 2 }
 const AUTH = { token: sessionStorage.getItem('token') || '', role: (sessionStorage.getItem('role') as Role) || 'approver' }
 
-const AuthCtx = createContext<{ role: Role; token: string; set: (r: Role, t: string) => void }>({
-  role: AUTH.role, token: AUTH.token, set: () => {},
+// verify a token against the backend; returns its real role (throws on 401). Used by the login gate.
+async function verifyToken(token: string): Promise<Role> {
+  const r = await fetch('/api/v1/whoami', { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (!r.ok) throw new Error(`${r.status}`)
+  return (await r.json()).role as Role
+}
+
+type AuthState = {
+  role: Role; token: string
+  openMode: boolean | null   // null = still discovering; true = no auth required
+  verified: boolean          // cleared to false in token mode until a valid token is entered
+  set: (r: Role, t: string) => void
+  login: (t: string) => Promise<void>
+  logout: () => void
+}
+const AuthCtx = createContext<AuthState>({
+  role: AUTH.role, token: AUTH.token, openMode: null, verified: false,
+  set: () => {}, login: async () => {}, logout: () => {},
 })
 export const useAuth = () => useContext(AuthCtx)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(AUTH.role)
   const [token, setTok] = useState(AUTH.token)
-  const set = (r: Role, t: string) => {
+  const [openMode, setOpenMode] = useState<boolean | null>(null)
+  const [verified, setVerified] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    fetch('/healthz').then(r => r.json()).then(async ({ open_mode }) => {
+      if (!alive) return
+      if (open_mode) { AUTH.token = ''; setOpenMode(true); setVerified(true); return }
+      setOpenMode(false)
+      if (AUTH.token) {  // resume a stored session if the token still verifies
+        try { const r = await verifyToken(AUTH.token); if (alive) { AUTH.role = r; setRole(r); setVerified(true) } }
+        catch { /* fall through to the login gate */ }
+      }
+    }).catch(() => { if (alive) { setOpenMode(true); setVerified(true) } })  // healthz down → don't hard-lock the UI
+    return () => { alive = false }
+  }, [])
+
+  const set = (r: Role, t: string) => {  // OPEN_MODE demo controls (nav dropdown + token input)
     AUTH.role = r; AUTH.token = t
     sessionStorage.setItem('role', r); sessionStorage.setItem('token', t)
     setRole(r); setTok(t)
   }
-  return <AuthCtx.Provider value={{ role, token, set }}>{children}</AuthCtx.Provider>
+  const login = async (t: string) => {
+    const r = await verifyToken(t)  // throws on invalid token → caller shows the error
+    AUTH.token = t; AUTH.role = r
+    sessionStorage.setItem('token', t); sessionStorage.setItem('role', r)
+    setTok(t); setRole(r); setVerified(true)
+  }
+  const logout = () => {
+    fetch('/api/v1/logout', { method: 'POST' }).catch(() => {})  // clear the HttpOnly SSE cookie
+    AUTH.token = ''; sessionStorage.removeItem('token')
+    setTok(''); setVerified(false)
+  }
+  return <AuthCtx.Provider value={{ role, token, openMode, verified, set, login, logout }}>{children}</AuthCtx.Provider>
 }
 
 export function RoleGate({ need, children }: { need: Role; children: ReactNode }) {

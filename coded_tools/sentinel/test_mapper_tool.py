@@ -127,9 +127,15 @@ class TestMapperTool(CodedTool):
                     selected[tid] = {"test_id": tid, "reason": "smoke set", "mapping_source": "smoke"}
 
             # LLM add-only (test_selection_agent may widen); never removes mapper selections.
+            # Reject invented ids (e.g. a generic "smoke") — the file part must exist on disk, else a
+            # phantom id turns the safe full-suite fallback into a broken empty subset (pytest ran 0).
             for tid in (args.get("added_test_ids") or []):
-                if tid and tid not in selected:
-                    selected[tid] = {"test_id": tid, "reason": "added by reviewer", "mapping_source": "llm_added"}
+                if not tid or tid in selected:
+                    continue
+                if not os.path.exists(os.path.join(repo, tid.split("::", 1)[0])):
+                    logger.info("run %s: dropped invented added_test_id %r (no such file)", run_id, tid)
+                    continue
+                selected[tid] = {"test_id": tid, "reason": "added by reviewer", "mapping_source": "llm_added"}
 
             sources = {s["mapping_source"] for s in selected.values()}
             confidence = "medium" if sources & {"import_graph", "convention"} else "low"

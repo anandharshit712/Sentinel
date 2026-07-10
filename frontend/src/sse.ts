@@ -14,6 +14,7 @@ export function useRunEvents(id: string, active: boolean, onDone?: () => void) {
   useEffect(() => {
     if (!id || !active) return
     setEvents([])
+    // token rides the HttpOnly cookie set at login (same-origin); no token in the URL.
     const es = new EventSource(`/api/v1/runs/${id}/events`)
     es.onmessage = (m) => {
       const ev: RunEvent = JSON.parse(m.data)

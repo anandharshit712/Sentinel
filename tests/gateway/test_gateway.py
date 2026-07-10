@@ -76,6 +76,9 @@ def client(monkeypatch):
                  "list_runs", "list_approvals", "list_audit"):
         monkeypatch.setattr(dao, name, getattr(fake, name))
     monkeypatch.setattr(gw, "invoke_network", _fake_invoke)
+    # these tests exercise the pipeline/SSE/approval logic, not auth; run in open mode.
+    # auth itself (fail-closed default) is covered by test_auth_fail_closed below.
+    monkeypatch.setattr(gw.settings, "OPEN_MODE", True)
     # context-manager client => one persistent portal/loop so background tasks actually run
     with TestClient(gw.app) as c:
         yield c, fake
@@ -134,3 +137,15 @@ def test_reject_approval_needs_comment(client):
     c, _ = client
     r = c.post("/api/v1/approvals/1", json={"action": "reject"})
     assert r.status_code == 400
+
+
+def test_auth_fail_closed(monkeypatch):
+    """C4: with tokens configured and no open-mode opt-in, privileged routes need a valid token."""
+    monkeypatch.setattr(gw.settings, "OPEN_MODE", False)
+    monkeypatch.setattr(gw.settings, "API_TOKENS", {"secret-admin-tok": "admin"})
+    with TestClient(gw.app) as c:
+        assert c.get("/api/v1/whoami").status_code == 401                       # no token
+        assert c.get("/api/v1/whoami",
+                     headers={"Authorization": "Bearer wrong"}).status_code == 401
+        r = c.get("/api/v1/whoami", headers={"Authorization": "Bearer secret-admin-tok"})
+        assert r.status_code == 200 and r.json()["role"] == "admin"

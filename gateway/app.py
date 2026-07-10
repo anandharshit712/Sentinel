@@ -13,14 +13,20 @@ Run state machine (04 §7.2): received -> analyzing -> reviewing -> testing -> s
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as _dt
+import hmac
+import ipaddress
 import json
+import os
+import socket
 import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -30,6 +36,7 @@ from db import dao
 from gateway import settings
 from gateway.invoker.neuro_san_client import invoke_network
 from lib import workspace
+from lib.redact import redact
 
 app = FastAPI(title="Sentinel Delivery Gateway", version="1")
 
@@ -94,32 +101,89 @@ def _terminal(ev: dict) -> bool:
 
 
 # ---------------------------------------------------------------- auth shim
+def _role_for(token: str | None) -> str | None:
+    """Resolve a bare token to its role. OPEN_MODE -> admin; unknown token -> None."""
+    if settings.OPEN_MODE:
+        return "admin"
+    tok = (token or "").strip()
+    for known, role in settings.API_TOKENS.items():
+        if hmac.compare_digest(known, tok):  # constant-time; avoids a token timing oracle (L3)
+            return role
+    return None
+
+
+def _check(role: str | None, min_role: str) -> str:
+    if not role:
+        raise HTTPException(401, "invalid or missing token")
+    if settings.ROLE_RANK[role] < settings.ROLE_RANK[min_role]:
+        raise HTTPException(403, f"requires {min_role}")
+    return role
+
+
 def _require(min_role: str):
     def dep(authorization: str | None = Header(default=None)) -> str:
-        if settings.OPEN_MODE:
-            return "admin"
         tok = (authorization or "").removeprefix("Bearer ").strip()
-        role = settings.API_TOKENS.get(tok)
-        if not role:
-            raise HTTPException(401, "invalid or missing token")
-        if settings.ROLE_RANK[role] < settings.ROLE_RANK[min_role]:
-            raise HTTPException(403, f"requires {min_role}")
-        return role
+        return _check(_role_for(tok), min_role)
     return dep
 
 
 # ---------------------------------------------------------------- pipeline runner
+_ALLOWED_CLONE_SCHEMES = {"https"}
+
+
+def _validate_clone_url(url: str) -> str:
+    """Reject anything that isn't a plain https:// URL to a public host (C2).
+
+    Closes ext:: transport RCE, file:// local reads, `-`-prefixed option injection, and SSRF to
+    internal/loopback/link-local addresses. The GitHub Action's
+    https://x-access-token:<token>@github.com/... still passes (https + public host).
+    """
+    if not url or url.startswith("-"):
+        raise ValueError("event.repo.url is empty or option-like")
+    parts = urlsplit(url)
+    if parts.scheme not in _ALLOWED_CLONE_SCHEMES:
+        raise ValueError(f"repo.url scheme must be https (got {parts.scheme!r})")
+    host = parts.hostname
+    if not host:
+        raise ValueError("repo.url has no host")
+    try:
+        addrs = {ai[4][0] for ai in socket.getaddrinfo(host, None)}
+    except socket.gaierror as e:
+        raise ValueError(f"repo.url host does not resolve: {host}") from e
+    for addr in addrs:
+        ip = ipaddress.ip_address(addr)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise ValueError("repo.url resolves to a non-public address (SSRF blocked)")
+    return url
+
+
+def _redact_url(url: str) -> str:
+    """Drop userinfo (user:pass@) from a URL so tokens aren't persisted/served (H2)."""
+    try:
+        p = urlsplit(url)
+        if p.username or p.password:
+            netloc = p.hostname or ""
+            if p.port:
+                netloc += f":{p.port}"
+            return urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    except Exception:
+        pass
+    return url
+
+
 def _clone(event: dict, run_id: str) -> str:
     """Shallow-clone the repo for this run; returns the workspace path."""
-    url = ((event.get("repo") or {}).get("url") or "").strip()
-    if not url:
-        raise ValueError("event.repo.url required to clone workspace")
+    url = _validate_clone_url(((event.get("repo") or {}).get("url") or "").strip())
     ws = str(workspace.ensure_workspace(run_id))
     # full clone (local sample repos are tiny; both base/head shas must be reachable for git diff)
     # ponytail: full clone; switch to --filter=blob:none partial clone if a big repo shows up
     # -c core.longpaths=true: survive Windows MAX_PATH (260) on deeply-nested repos (exit 128)
-    r = subprocess.run(["git", "-c", "core.longpaths=true", "clone", "--quiet", url, ws],
-                       capture_output=True, text=True)
+    # C2 defense-in-depth: GIT_ALLOW_PROTOCOL/protocol.ext.allow disable ext::/file://; '--' stops
+    # an option-like url being read as a flag even if _validate_clone_url is somehow bypassed.
+    env = {**os.environ, "GIT_ALLOW_PROTOCOL": "https", "GIT_TERMINAL_PROMPT": "0"}
+    r = subprocess.run(["git", "-c", "protocol.ext.allow=never", "-c", "core.longpaths=true",
+                        "clone", "--quiet", "--", url, ws],
+                       capture_output=True, text=True, env=env)
     if r.returncode != 0:  # surface git's real stderr, not just the exit code (e.g. "Filename too long")
         raise RuntimeError(f"git clone failed (exit {r.returncode}): {(r.stderr or r.stdout or '').strip()[:400]}")
     return ws
@@ -180,9 +244,10 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         bus.publish(run_id, {"kind": "state_change", "state": "done",
                              "decision": decision, "structure": structure})
     except Exception as e:  # transport/stream/clone failure -> failed, re-runnable
+        msg = redact(str(e))[:500]  # M3: scrub credentials (e.g. tokenized clone url in git stderr)
         dao.set_run_state(run_id, "failed", finished=True)
-        dao.record_audit(run_id, actor="gateway", action="run_failed", payload={"error": str(e)[:500]})
-        bus.publish(run_id, {"kind": "state_change", "state": "failed", "error": str(e)[:500]})
+        dao.record_audit(run_id, actor="gateway", action="run_failed", payload={"error": msg})
+        bus.publish(run_id, {"kind": "state_change", "state": "failed", "error": msg})
     finally:
         if not ws_override:
             workspace.cleanup_workspace(run_id)
@@ -223,11 +288,15 @@ _TASKS: set[asyncio.Task] = set()  # keep strong refs so background runs aren't 
 def _start_run(event: dict, ws_override: str | None) -> str:
     tt = event["target_transition"]
     run_id = str(uuid.uuid4())
-    dao.insert_run(run_id, event=event, source=event.get("source", "manual"),
+    stored = copy.deepcopy(event)  # H2: DB/API copy with credentials stripped from repo.url
+    repo = stored.get("repo") or {}
+    if repo.get("url"):
+        repo["url"] = _redact_url(repo["url"])
+    dao.insert_run(run_id, event=stored, source=event.get("source", "manual"),
                    repo=event["repo"]["name"], from_env=tt["from_env"], to_env=tt["to_env"])
     dao.record_audit(run_id, actor="gateway", action="run_received",
                      payload={"event_id": event["event_id"]})
-    task = asyncio.create_task(_run_pipeline(run_id, event, ws_override))
+    task = asyncio.create_task(_run_pipeline(run_id, event, ws_override))  # REAL event -> clone
     _TASKS.add(task)
     task.add_done_callback(_TASKS.discard)
     return run_id
@@ -236,13 +305,35 @@ def _start_run(event: dict, ws_override: str | None) -> str:
 # ---------------------------------------------------------------- endpoints
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "open_mode": settings.OPEN_MODE}  # open_mode drives the SPA login gate
+
+
+@app.get("/api/v1/whoami")
+def whoami(request: Request, response: Response, role: str = Depends(_require("viewer"))) -> dict:
+    """Verify a token and return its role (401 if invalid). SPA login gate calls this.
+
+    Also drops the token in an HttpOnly cookie so the SSE stream authenticates without a URL token
+    (EventSource can't send an Authorization header). Secure flag follows the request scheme.
+    """
+    tok = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if tok:  # not OPEN_MODE
+        response.set_cookie("sentinel_token", tok, httponly=True, samesite="lax",
+                            secure=request.url.scheme == "https", path="/")
+    return {"role": role, "open_mode": settings.OPEN_MODE}
+
+
+@app.post("/api/v1/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie("sentinel_token", path="/")
+    return {"ok": True}
 
 
 @app.post("/api/v1/simulate", status_code=202)
 async def simulate(body: SimulateBody, _role: str = Depends(_require("admin"))) -> dict:
     event = body.event
     _validate_event(event)
+    if settings.ALLOWED_REPOS and event["repo"]["name"] not in settings.ALLOWED_REPOS:
+        raise HTTPException(403, "repo not on the Sentinel allow-list")  # C3a
     existing = dao.find_run_by_event_id(event["event_id"])
     if existing:  # idempotent intake — same event_id returns the prior run
         run = dao.get_run(existing) or {}
@@ -282,7 +373,12 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
 
 
 @app.get("/api/v1/runs/{run_id}/events")
-async def run_events(run_id: str, _role: str = Depends(_require("viewer"))) -> EventSourceResponse:
+async def run_events(run_id: str, request: Request) -> EventSourceResponse:
+    # EventSource can't send an Authorization header, so it rides the HttpOnly cookie set by whoami
+    # (same-origin). Header fallback kept for curl/tests.
+    tok = request.cookies.get("sentinel_token") \
+        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    _check(_role_for(tok), "viewer")
     if not dao.get_run(run_id):
         raise HTTPException(404, "run not found")
 
@@ -358,5 +454,9 @@ if (_DIST / "index.html").exists():
     def spa(full_path: str) -> FileResponse:
         if full_path.startswith(("api/", "healthz")):
             raise HTTPException(404)
-        f = _DIST / full_path
-        return FileResponse(f if f.is_file() else _DIST / "index.html")
+        root = _DIST.resolve()
+        target = (root / full_path).resolve()
+        # C1 containment: only serve a real file inside dist/; traversal/missing -> SPA index
+        if target.is_file() and (target == root or root in target.parents):
+            return FileResponse(target)
+        return FileResponse(root / "index.html")

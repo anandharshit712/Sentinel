@@ -16,6 +16,19 @@ WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", Path(tempfile.gettempdir(
 
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# H1: git refs the pipeline legitimately uses — a hex SHA (7-64) or HEAD / HEAD~N. Anything else
+# (esp. a leading '-' or '..') is rejected so a hostile base/head can't be read as a git option.
+_REF_RE = re.compile(r"^(?:[0-9a-fA-F]{7,64}|HEAD(?:~\d+)?)$")
+
+
+def valid_ref(ref):
+    """Return `ref` if it is a safe git ref (hex sha / HEAD / HEAD~N), else raise ValueError."""
+    if ref is None:
+        return None
+    if not isinstance(ref, str) or not _REF_RE.match(ref):
+        raise ValueError(f"unsafe git ref: {ref!r}")
+    return ref
+
 
 def _safe(run_id: str) -> str:
     if not run_id or not _SAFE.match(run_id):
@@ -56,8 +69,8 @@ def run_inputs(sly_data: dict, args: dict | None = None) -> tuple:
         ws = str(workspace_path(sly_data["run_id"]))
     return (
         ws,
-        args.get("base_ref") or change.get("base_sha"),
-        args.get("head_ref") or change.get("head_sha"),
+        valid_ref(args.get("base_ref") or change.get("base_sha")),
+        valid_ref(args.get("head_ref") or change.get("head_sha")),
         args.get("repo_name") or repo.get("name"),
     )
 

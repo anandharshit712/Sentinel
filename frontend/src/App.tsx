@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, NavLink, Route, Routes, useSearchParams } from 'react-router-dom'
 import {
   AuthProvider, useAuth, BandChip, DecisionChip, StateChip, RelativeTime,
@@ -8,21 +9,67 @@ import RunDetailRoute, { RunDetailPane, ApprovalControls } from './RunDetail'
 export default function App() {
   return (
     <AuthProvider>
-      <Shell>
-        <Routes>
-          <Route path="/" element={<RunsList />} />
-          <Route path="/runs/compare" element={<Compare />} />
-          <Route path="/runs/:id" element={<RunDetailRoute />} />
-          <Route path="/approvals" element={<Approvals />} />
-          <Route path="/audit" element={<Audit />} />
-        </Routes>
-      </Shell>
+      <Gate>
+        <Shell>
+          <Routes>
+            <Route path="/" element={<RunsList />} />
+            <Route path="/runs/compare" element={<Compare />} />
+            <Route path="/runs/:id" element={<RunDetailRoute />} />
+            <Route path="/approvals" element={<Approvals />} />
+            <Route path="/audit" element={<Audit />} />
+          </Routes>
+        </Shell>
+      </Gate>
     </AuthProvider>
   )
 }
 
+// Token mode: block the app behind a login until a valid token is entered. OPEN_MODE passes straight through.
+function Gate({ children }: { children: React.ReactNode }) {
+  const { openMode, verified } = useAuth()
+  if (openMode === null)
+    return <div className="grid min-h-screen place-items-center text-xs uppercase tracking-widest text-[var(--ink-dim)]">connecting…</div>
+  if (!openMode && !verified) return <LoginGate />
+  return <>{children}</>
+}
+
+function LoginGate() {
+  const { login } = useAuth()
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!token.trim() || busy) return
+    setBusy(true); setErr('')
+    login(token.trim())
+      .catch(x => setErr(String(x).includes('401') ? 'Invalid token.' : 'Verification failed — is the Gateway up?'))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <div className="grid min-h-screen place-items-center px-5">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-md border border-[var(--line)] bg-[var(--panel)] p-6">
+        <div className="mb-5 flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-[var(--signal)]" style={{ boxShadow: '0 0 8px var(--signal)' }} />
+          <span className="text-base font-bold uppercase tracking-[0.3em] text-[var(--ink-hi)]">Sentinel</span>
+        </div>
+        <label className="mb-1.5 block text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">Access token</label>
+        <input autoFocus type="password" value={token} onChange={e => setToken(e.target.value)}
+          placeholder="paste your token"
+          className="w-full rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-3 py-2 text-sm text-[var(--ink)] focus:border-[var(--signal)] focus:outline-none" />
+        {err && <p className="mt-2 text-[11px] text-red-300">{err}</p>}
+        <button type="submit" disabled={busy || !token.trim()}
+          className="mt-4 w-full rounded-sm border border-[var(--signal)]/40 bg-[var(--signal-dim)] px-4 py-2 text-xs uppercase tracking-widest text-[var(--signal)] hover:bg-[var(--signal)]/10 disabled:opacity-40">
+          {busy ? 'Verifying…' : 'Enter'}
+        </button>
+        <p className="mt-3 text-[10px] leading-relaxed text-[var(--ink-dim)]">Your role is read from the token. Ask an admin for one, or unset <code>API_TOKENS</code> in <code>.env</code> to run open.</p>
+      </form>
+    </div>
+  )
+}
+
 function Shell({ children }: { children: React.ReactNode }) {
-  const { role, token, set } = useAuth()
+  const { role, token, openMode, set, logout } = useAuth()
   const nav = ({ isActive }: { isActive: boolean }) =>
     `text-xs uppercase tracking-widest transition-colors ${isActive ? 'text-[var(--signal)]' : 'text-[var(--ink-dim)] hover:text-[var(--ink)]'}`
   return (
@@ -39,14 +86,23 @@ function Shell({ children }: { children: React.ReactNode }) {
           <span className="hidden items-center gap-1.5 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--signal)]" style={{ animation: 'blink 1.4s steps(2) infinite' }} />system live
           </span>
-          <select value={role} onChange={e => set(e.target.value as any, token)}
-            className="rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--ink)]" title="demo role (UI gating)">
-            <option value="viewer">viewer</option>
-            <option value="approver">approver</option>
-            <option value="admin">admin</option>
-          </select>
-          <input value={token} onChange={e => set(role, e.target.value)} placeholder="token"
-            className="w-24 rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] text-[var(--ink)]" />
+          {openMode ? (
+            <>
+              <select value={role} onChange={e => set(e.target.value as any, token)}
+                className="rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--ink)]" title="demo role (UI gating)">
+                <option value="viewer">viewer</option>
+                <option value="approver">approver</option>
+                <option value="admin">admin</option>
+              </select>
+              <input value={token} onChange={e => set(role, e.target.value)} placeholder="token"
+                className="w-24 rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] text-[var(--ink)]" />
+            </>
+          ) : (
+            <>
+              <span className="rounded-sm border border-[var(--line)] bg-[var(--bg-2)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--signal)]">{role}</span>
+              <button onClick={logout} className="rounded-sm border border-[var(--line)] px-2 py-1 text-[10px] uppercase tracking-wider text-[var(--ink-dim)] hover:border-red-500/40 hover:text-red-300">logout</button>
+            </>
+          )}
         </span>
       </nav>
       <main className="py-5">{children}</main>

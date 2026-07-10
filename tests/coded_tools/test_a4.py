@@ -45,6 +45,19 @@ def test_mapper_selects_importers_and_smoke():
     assert tp["selection_confidence"] == "medium"
 
 
+def test_mapper_drops_invented_added_test_ids():
+    """A phantom llm-added id (e.g. 'smoke', no such file) is rejected; a real file is kept.
+    Prevents the phantom-id-turns-full-suite-fallback-into-empty-subset bug."""
+    sly = {"run_id": "r", "change_profile": {"files": [], "blast_radius": {"direct": [], "transitive": []}}}
+    out = TestMapperTool().invoke(
+        {"repo_path": SAMPLE, "repo_name": "python-payments-service",
+         "added_test_ids": ["smoke", "tests/test_auth.py"]}, sly)
+    assert not isinstance(out, str), out
+    ids = {s["test_id"] for s in sly["test_plan"]["selected"]}
+    assert "smoke" not in ids                    # invented id dropped
+    assert "tests/test_auth.py" in ids           # real file kept
+
+
 def test_runner_executes_pytest_subset_and_parses_results():
     plan = {"selected": [{"test_id": "tests/test_auth.py", "mapping_source": "import_graph", "reason": "x"}],
             "smoke_set": ["tests/test_health.py::test_health_ok"]}
