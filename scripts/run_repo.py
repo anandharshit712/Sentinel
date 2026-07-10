@@ -10,6 +10,7 @@ local clone only reads the SHAs. repo.name is derived as owner/repo so it matche
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -44,7 +45,8 @@ def main() -> int:
     ap.add_argument("--to-env", default="test")
     ap.add_argument("--name", help="repo.name (default: owner/repo from URL)")
     ap.add_argument("--gateway", default="http://localhost:8000")
-    ap.add_argument("--token", default="", help="Bearer token if the Gateway isn't in OPEN_MODE")
+    ap.add_argument("--token", default=os.environ.get("SENTINEL_TOKEN", ""),
+                    help="Bearer token if the Gateway isn't in OPEN_MODE (or set SENTINEL_TOKEN)")
     a = ap.parse_args()
 
     base, head = (a.base, a.head) if (a.base and a.head) else _last_two_shas(a.url)
