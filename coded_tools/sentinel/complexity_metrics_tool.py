@@ -1,7 +1,7 @@
 """complexity_metrics_tool (04 §5.6, A3) — measured cyclomatic complexity, base-vs-head delta.
 
 The code_quality_agent must never estimate these numbers itself (04 §5.4 instruction 1); this tool
-supplies them. For every changed Python function/method in change_profile it computes an
+supplies them. For every changed Python/JS/TS function/method in change_profile it computes an
 (approximate) McCabe complexity at head and base and the regression (head − base) plus function
 length, reading the workspace + refs from Gateway-seeded sly_data. Returns metrics to the agent.
 """
@@ -11,9 +11,10 @@ import ast
 import asyncio
 import logging
 import subprocess
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from lib import ts_parse
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.complexity_metrics")
@@ -75,6 +76,20 @@ def _funcs(src: str) -> Dict[str, ast.AST]:
         return {}
 
 
+def _complexity_and_length(language: str, path: str, src: str, name: str) -> Optional[Tuple[int, int]]:
+    if language == "python":
+        node = _funcs(src).get(name)
+        if node is None:
+            return None
+        return _complexity(node), getattr(node, "end_lineno", node.lineno) - node.lineno + 1
+    if language in ("javascript", "typescript"):
+        try:
+            return ts_parse.complexity_and_length(path, src, name)
+        except Exception:
+            return None  # never let a parse error break the pipeline
+    return None
+
+
 class ComplexityMetricsTool(CodedTool):
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         run_id = sly_data.get("run_id", "?")
@@ -86,20 +101,24 @@ class ComplexityMetricsTool(CodedTool):
 
             metrics: List[Dict[str, Any]] = []
             for f in profile.get("files", []):
-                if f.get("language") != "python" or f.get("change_type") == "deleted":
+                lang = f.get("language")
+                if lang not in ("python", "javascript", "typescript") or f.get("change_type") == "deleted":
                     continue
                 changed = [d for d in f.get("functions_changed", []) if d["kind"] in ("function", "method")]
                 if not changed:
                     continue
-                head_fns = _funcs(_show(repo, head, f["path"])) if head else {}
-                base_fns = _funcs(_show(repo, base, f.get("old_path", f["path"]))) if base else {}
+                old_path = f.get("old_path", f["path"])
+                head_src = _show(repo, head, f["path"]) if head else ""
+                base_src = _show(repo, base, old_path) if base else ""
+                # ponytail: re-parses the file per changed function (was once-per-file for the pure
+                # Python path); fine for the handful of changed functions a diff typically touches,
+                # revisit with a per-file parse cache if large multi-function diffs prove slow.
                 for d in changed:
                     name = d["name"]
-                    hn = head_fns.get(name)
-                    ch = _complexity(hn) if hn else 0
-                    bn = base_fns.get(name)
-                    cb = _complexity(bn) if bn else 0
-                    length = (getattr(hn, "end_lineno", hn.lineno) - hn.lineno + 1) if hn else 0
+                    hc = _complexity_and_length(lang, f["path"], head_src, name)
+                    bc = _complexity_and_length(lang, old_path, base_src, name)
+                    ch, length = hc if hc else (0, 0)
+                    cb = bc[0] if bc else 0
                     metrics.append({"file": f["path"], "name": name, "complexity_head": ch,
                                     "complexity_base": cb, "complexity_delta": ch - cb, "length": length})
 

@@ -1,0 +1,18 @@
+{
+  "name": "node-catalog-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiny Express + Jest fixture for Sentinel's JS/TS analysis tools and demo runs.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jest": "^30.0.0",
+    "supertest": "^7.0.0"
+  }
+}

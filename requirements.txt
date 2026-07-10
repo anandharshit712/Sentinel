@@ -27,5 +27,9 @@ psycopg[binary]>=3.3
 # --- Data contracts ---
 jsonschema>=4.0
 
+# --- Static analysis: JS/TS parsing (prebuilt wheels, no compiler needed) ---
+tree-sitter>=0.23
+tree-sitter-language-pack>=0.2
+
 # --- Dev / test ---
 pytest>=8.0

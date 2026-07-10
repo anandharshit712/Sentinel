@@ -2,22 +2,24 @@
 
 Reads test_plan from sly_data, detects the repo's runner, runs the selected node-ids as a
 subprocess in the workspace with a scrubbed environment (no tokens/secrets) and a timeout, parses
-the JUnit XML into the test_results contract and writes it to sly_data. Python/pytest is
-implemented; jest is detected but deferred with the node sample repo. Never raises: a timeout or a
-missing runner becomes a stage_failure in the contract.
+the result into the test_results contract and writes it to sly_data. Python/pytest (JUnit XML) and
+JS-TS/jest (`--json`) are both implemented. Never raises: a timeout or a missing runner becomes a
+stage_failure in the contract.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
@@ -29,6 +31,8 @@ logger = logging.getLogger("coded_tools.test_runner")
 
 _SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|API|DATABASE_URL|NVIDIA|CRED)", re.I)
 _STATUS_TAG = {"failure": "failed", "error": "error", "skipped": "skipped"}
+_JEST_STATUS = {"passed": "passed", "failed": "failed", "pending": "skipped", "todo": "skipped"}
+_EMPTY_TOTALS = {"passed": 0, "failed": 0, "skipped": 0}
 # markers that identify a Python project dir (for monorepo detection + per-repo dep install)
 _PY_MARKERS = ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "pytest.ini", "tox.ini")
 # dirs never worth scanning/installing (vendored, build output, virtualenvs, caches)
@@ -67,7 +71,7 @@ def _detect_runner(repo: str) -> str:
     if _project_dirs(repo, None):
         return "pytest"
     if os.path.isfile(os.path.join(repo, "package.json")):
-        return "jest"  # deferred with the node sample repo
+        return "jest"
     return "none_detected"
 
 
@@ -123,7 +127,7 @@ def _collect_total(py: str, repo: str, env: Dict[str, str], timeout: int) -> int
 
 
 def _parse_junit(path: str) -> tuple:
-    totals = {"passed": 0, "failed": 0, "skipped": 0, "errors": 0}
+    totals = dict(_EMPTY_TOTALS)
     cases: List[Dict[str, Any]] = []
     root = ET.parse(path).getroot()
     for suite in root.iter("testsuite"):
@@ -137,11 +141,54 @@ def _parse_junit(path: str) -> tuple:
                     status = mapped
                     msg = el.get("message", "") or (el.text or "")
                     break
-            totals["errors" if status == "error" else status] += 1
+            totals["errors" if status == "error" else status] = totals.get(
+                "errors" if status == "error" else status, 0) + 1
             case = {"test_id": tid, "status": status,
                     "duration_ms": int(float(tc.get("time", 0)) * 1000)}
             if msg:
                 case["failure_message"] = msg[:2000]
+            cases.append(case)
+    return totals, cases
+
+
+def _resolve_bin(name: str) -> Optional[str]:
+    return shutil.which(name)
+
+
+def _npm_install(npm: str, repo: str, env: Dict[str, str], timeout: int) -> None:
+    """SECURITY: `npm install` runs the repo's lifecycle scripts (arbitrary code) on the Gateway
+    host — same class of risk as `_prepare_venv`'s `pip install -e .`, gated the same way behind
+    repo_config `install_deps`."""
+    subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=repo, env=env,
+                   check=True, capture_output=True, text=True, timeout=timeout)
+
+
+def _list_jest_files(npx: str, repo: str, env: Dict[str, str], timeout: int) -> List[str]:
+    """Total test FILES jest would run — the denominator for selection (JS selection is
+    file-granularity, unlike pytest's per-test-id granularity; see test_mapper_tool)."""
+    try:
+        r = subprocess.run([npx, "jest", "--listTests"], cwd=repo, env=env,
+                           capture_output=True, text=True, timeout=min(timeout, 120), check=False)
+        return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+
+def _parse_jest_json(path: str, repo: str) -> tuple:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    totals = dict(_EMPTY_TOTALS)
+    cases: List[Dict[str, Any]] = []
+    for suite in data.get("testResults", []):
+        rel = os.path.relpath(suite.get("name", ""), repo).replace("\\", "/")
+        for a in suite.get("assertionResults", []):
+            status = _JEST_STATUS.get(a.get("status"), "failed")
+            totals[status] = totals.get(status, 0) + 1
+            case = {"test_id": f"{rel}::{a.get('fullName') or a.get('title', '?')}",
+                    "status": status, "duration_ms": int(a.get("duration") or 0)}
+            msgs = a.get("failureMessages") or []
+            if msgs:
+                case["failure_message"] = "\n".join(msgs)[:2000]
             cases.append(case)
     return totals, cases
 
@@ -161,74 +208,139 @@ class TestRunnerTool(CodedTool):
                 [s["test_id"] for s in plan.get("selected", [])] + list(plan.get("smoke_set", []))))
 
             runner = _detect_runner(repo)
-            if runner != "pytest":
-                return self._store(sly_data, run_id, {
-                    "runner": runner, "command": "", "totals": {"passed": 0, "failed": 0, "skipped": 0},
-                    "cases": [], "duration_seconds": 0.0, "timed_out": False,
-                    "stage_failure": f"runner {runner} not supported yet"})
-
             cfg = self._repo_cfg(repo_name)
-            timeout = int(cfg.get("test_timeout_seconds", 900))
             env = _scrubbed_env()
 
-            # By default run with the Gateway's own interpreter (deps already present, e.g. sample
-            # repos). Real external repos rarely share the Gateway's env, so repo_config may opt in
-            # to a per-run venv with the repo's deps installed (see _prepare_venv security note).
-            py = sys.executable
-            if cfg.get("install_deps"):
-                proj = _project_dirs(repo, cfg.get("test_project_dirs"))
-                itimeout = int(cfg.get("install_timeout_seconds", 600))
-                try:
-                    py = _prepare_venv(repo, proj, env, itimeout)
-                except subprocess.TimeoutExpired:
-                    return self._store(sly_data, run_id, {
-                        "runner": "pytest", "command": "", "totals": {"passed": 0, "failed": 0, "skipped": 0},
-                        "cases": [], "duration_seconds": 0.0, "timed_out": False,
-                        "stage_failure": f"dependency install exceeded {itimeout}s"})
-                except subprocess.CalledProcessError as e:
-                    tail = ((e.stderr or e.stdout or "")[-1000:]).strip()
-                    return self._store(sly_data, run_id, {
-                        "runner": "pytest", "command": "", "totals": {"passed": 0, "failed": 0, "skipped": 0},
-                        "cases": [], "duration_seconds": 0.0, "timed_out": False,
-                        "stage_failure": f"dependency install failed: {tail}"})
-
-            suite_total = _collect_total(py, repo, env, timeout)
-            # Selection story: run only the mapped ids; if nothing mapped, fall back to the full
-            # suite but LABEL it honestly (never silently "select" everything).
-            selection_mode = "subset" if ids else "full_suite_fallback"
-            fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-")
-            os.close(fd)
-            cmd = [py, "-m", "pytest", *ids,
-                   "--junitxml", xml_path, "-q", "-p", "no:cacheprovider"]
-            start = time.perf_counter()
-            try:
-                subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
-                               text=True, timeout=timeout, check=False)
-                timed_out = False
-            except subprocess.TimeoutExpired:
-                timed_out = True
-            elapsed = round(time.perf_counter() - start, 3)
-
-            payload: Dict[str, Any] = {"runner": "pytest", "command": " ".join(cmd),
-                                       "duration_seconds": elapsed, "timed_out": timed_out,
-                                       "suite_total": suite_total, "selection_mode": selection_mode,
-                                       "selected_ids": ids}
-            if timed_out:
-                payload.update(totals={"passed": 0, "failed": 0, "skipped": 0}, cases=[],
-                               stage_failure=f"test run exceeded {timeout}s")
-            elif os.path.getsize(xml_path) > 0:
-                totals, cases = _parse_junit(xml_path)
-                payload.update(totals=totals, cases=cases)
+            if runner == "pytest":
+                payload = self._run_pytest(repo, cfg, env, ids)
+            elif runner == "jest":
+                payload = self._run_jest(repo, cfg, env, ids)
             else:
-                payload.update(totals={"passed": 0, "failed": 0, "skipped": 0}, cases=[],
-                               stage_failure="no JUnit output (runner crashed)")
-            executed = sum(payload["totals"].values())
-            payload["executed"] = executed
-            payload["excluded"] = max(0, suite_total - executed)
-            os.unlink(xml_path)
+                payload = {"runner": runner, "command": "", "totals": dict(_EMPTY_TOTALS),
+                           "cases": [], "duration_seconds": 0.0, "timed_out": False,
+                           "stage_failure": f"runner {runner} not supported yet"}
             return self._store(sly_data, run_id, payload)
         except Exception as e:
             return f"Error: {e}"
+
+    def _run_pytest(self, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+                    ids: List[str]) -> Dict[str, Any]:
+        timeout = int(cfg.get("test_timeout_seconds", 900))
+
+        # By default run with the Gateway's own interpreter (deps already present, e.g. sample
+        # repos). Real external repos rarely share the Gateway's env, so repo_config may opt in
+        # to a per-run venv with the repo's deps installed (see _prepare_venv security note).
+        py = sys.executable
+        if cfg.get("install_deps"):
+            proj = _project_dirs(repo, cfg.get("test_project_dirs"))
+            itimeout = int(cfg.get("install_timeout_seconds", 600))
+            try:
+                py = _prepare_venv(repo, proj, env, itimeout)
+            except subprocess.TimeoutExpired:
+                return {"runner": "pytest", "command": "", "totals": dict(_EMPTY_TOTALS),
+                       "cases": [], "duration_seconds": 0.0, "timed_out": False,
+                       "stage_failure": f"dependency install exceeded {itimeout}s"}
+            except subprocess.CalledProcessError as e:
+                tail = ((e.stderr or e.stdout or "")[-1000:]).strip()
+                return {"runner": "pytest", "command": "", "totals": dict(_EMPTY_TOTALS),
+                       "cases": [], "duration_seconds": 0.0, "timed_out": False,
+                       "stage_failure": f"dependency install failed: {tail}"}
+
+        suite_total = _collect_total(py, repo, env, timeout)
+        # Selection story: run only the mapped ids; if nothing mapped, fall back to the full
+        # suite but LABEL it honestly (never silently "select" everything).
+        selection_mode = "subset" if ids else "full_suite_fallback"
+        fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-")
+        os.close(fd)
+        cmd = [py, "-m", "pytest", *ids, "--junitxml", xml_path, "-q", "-p", "no:cacheprovider"]
+        start = time.perf_counter()
+        try:
+            subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
+                           text=True, timeout=timeout, check=False)
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        elapsed = round(time.perf_counter() - start, 3)
+
+        payload: Dict[str, Any] = {"runner": "pytest", "command": " ".join(cmd),
+                                   "duration_seconds": elapsed, "timed_out": timed_out,
+                                   "suite_total": suite_total, "selection_mode": selection_mode,
+                                   "selected_ids": ids}
+        if timed_out:
+            payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
+                           stage_failure=f"test run exceeded {timeout}s")
+        elif os.path.getsize(xml_path) > 0:
+            totals, cases = _parse_junit(xml_path)
+            payload.update(totals=totals, cases=cases)
+        else:
+            payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
+                           stage_failure="no JUnit output (runner crashed)")
+        executed = sum(payload["totals"].values())
+        payload["executed"] = executed
+        payload["excluded"] = max(0, suite_total - executed)
+        os.unlink(xml_path)
+        return payload
+
+    def _run_jest(self, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+                 ids: List[str]) -> Dict[str, Any]:
+        timeout = int(cfg.get("test_timeout_seconds", 900))
+        npx, npm = _resolve_bin("npx"), _resolve_bin("npm")
+        if not npx or not npm:
+            return {"runner": "jest", "command": "", "totals": dict(_EMPTY_TOTALS), "cases": [],
+                   "duration_seconds": 0.0, "timed_out": False,
+                   "stage_failure": "node/npm not found on PATH"}
+
+        if cfg.get("install_deps") and not os.path.isdir(os.path.join(repo, "node_modules")):
+            itimeout = int(cfg.get("install_timeout_seconds", 600))
+            try:
+                _npm_install(npm, repo, env, itimeout)
+            except subprocess.TimeoutExpired:
+                return {"runner": "jest", "command": "", "totals": dict(_EMPTY_TOTALS), "cases": [],
+                       "duration_seconds": 0.0, "timed_out": False,
+                       "stage_failure": f"dependency install exceeded {itimeout}s"}
+            except subprocess.CalledProcessError as e:
+                tail = ((e.stderr or e.stdout or "")[-1000:]).strip()
+                return {"runner": "jest", "command": "", "totals": dict(_EMPTY_TOTALS), "cases": [],
+                       "duration_seconds": 0.0, "timed_out": False,
+                       "stage_failure": f"dependency install failed: {tail}"}
+
+        suite_total = len(_list_jest_files(npx, repo, env, timeout))  # file-granularity denominator
+        selection_mode = "subset" if ids else "full_suite_fallback"
+        fd, json_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-jest-")
+        os.close(fd)
+        # Bare positional args, not `--testPathPatterns=<a>|<b>`: jest OR's multiple bare path
+        # patterns natively (stable across Jest majors, no version-flag split needed), and a
+        # `|`-joined single arg breaks on Windows — npx's .CMD shim runs through cmd.exe, and
+        # Python's list2cmdline doesn't escape `|` for that inner shell, so it truncates there.
+        cmd = [npx, "jest", "--json", f"--outputFile={json_path}", *ids]
+        start = time.perf_counter()
+        try:
+            subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
+                           text=True, timeout=timeout, check=False)
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        elapsed = round(time.perf_counter() - start, 3)
+
+        payload: Dict[str, Any] = {"runner": "jest", "command": " ".join(cmd),
+                                   "duration_seconds": elapsed, "timed_out": timed_out,
+                                   "suite_total": suite_total, "selection_mode": selection_mode,
+                                   "selected_ids": ids}
+        if timed_out:
+            payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
+                           stage_failure=f"test run exceeded {timeout}s")
+        elif os.path.exists(json_path) and os.path.getsize(json_path) > 0:
+            totals, cases = _parse_jest_json(json_path, repo)
+            payload.update(totals=totals, cases=cases)
+        else:
+            payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
+                           stage_failure="no jest JSON output (runner crashed)")
+        executed = sum(payload["totals"].values())
+        payload["executed"] = executed
+        payload["excluded"] = max(0, suite_total - executed)
+        if os.path.exists(json_path):
+            os.unlink(json_path)
+        return payload
 
     def _repo_cfg(self, repo_name) -> Dict[str, Any]:
         """Per-repo config dict (test_timeout_seconds, install_deps, test_project_dirs, ...)."""

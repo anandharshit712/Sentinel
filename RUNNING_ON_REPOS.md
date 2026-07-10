@@ -16,6 +16,7 @@ Both use the **same** `POST /api/v1/simulate` endpoint: the Gateway clones the r
    - Optional: `API_TOKENS="secrettoken:admin"` to require auth. If unset, the Gateway runs **OPEN_MODE** (every request is admin — dev only).
 3. **`git`** on `PATH` (the Gateway clones repos).
 4. **`python` + `pip` with outbound network** — needed only if you enable per-repo dependency install (see [Real tests](#making-a-repos-tests-actually-run)).
+5. **`node` + `npm`/`npx` on `PATH`** — only needed for JS/TS repos (jest execution). Python-only repos don't need this.
 5. **Bring the stack up** (DB migrate → build dashboard → Neuro-SAN `:8080` + Gateway `:8000`):
 
    ```powershell

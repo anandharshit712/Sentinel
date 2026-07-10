@@ -1,9 +1,9 @@
 """ast_analyzer_tool (04 §5.2, A1) — changed/new functions and classes per changed file.
 
-Reads change_profile_wip (from git_diff), parses each Python file at base and head, and marks
-each def whose line range overlaps a changed hunk as functions_changed (is_new when absent at
-base). Mutates change_profile_wip in place. JavaScript/TypeScript is deferred until the node
-sample repo lands (needs tree-sitter); non-Python files are left with no functions_changed.
+Reads change_profile_wip (from git_diff), parses each Python/JS/TS file at base and head, and
+marks each def whose line range overlaps a changed hunk as functions_changed (is_new when absent
+at base). Mutates change_profile_wip in place. Python uses stdlib `ast`; JS/TS uses tree-sitter
+(lib/ts_parse). Other languages are left with no functions_changed.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import subprocess
 from typing import Any, Dict, List, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from lib import ts_parse
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.ast_analyzer")
@@ -50,7 +51,7 @@ class _Defs(ast.NodeVisitor):
         self._stack.pop()
 
 
-def _parse(src: str) -> Dict[str, Dict[str, Any]]:
+def _parse_python(src: str) -> Dict[str, Dict[str, Any]]:
     if not src:
         return {}
     try:
@@ -59,6 +60,17 @@ def _parse(src: str) -> Dict[str, Dict[str, Any]]:
         return {d["name"]: d for d in v.defs}
     except SyntaxError:
         return {}
+
+
+def _parse(language: str, path: str, src: str) -> Dict[str, Dict[str, Any]]:
+    if language == "python":
+        return _parse_python(src)
+    if language in ("javascript", "typescript"):
+        try:
+            return {d["name"]: d for d in ts_parse.extract_defs(path, src)}
+        except Exception:
+            return {}  # never let a parse error break the pipeline
+    return {}
 
 
 def _changed_ranges(hunks: List[Dict[str, Any]]) -> List[tuple]:
@@ -89,10 +101,12 @@ class AstAnalyzerTool(CodedTool):
             new_functions: List[str] = []
             total = 0
             for f in profile["files"]:
-                if f.get("language") != "python" or f.get("change_type") == "deleted":
+                lang = f.get("language")
+                if lang not in ("python", "javascript", "typescript") or f.get("change_type") == "deleted":
                     continue
-                head_defs = _parse(_show(repo, head, f["path"]))
-                base_defs = _parse(_show(repo, base, f.get("old_path", f["path"])))  # follow renames
+                head_defs = _parse(lang, f["path"], _show(repo, head, f["path"]))
+                base_defs = _parse(lang, f.get("old_path", f["path"]),
+                                   _show(repo, base, f.get("old_path", f["path"])))  # follow renames
                 ranges = _changed_ranges(f.get("hunks", []))
                 # a fully-added file has no base and (with -U0) may have no hunks: treat all defs as changed
                 treat_all = not base_defs or f.get("change_type") == "added"

@@ -1,6 +1,4 @@
 # Per-repo Sentinel config. Key under `repos:` = DeliveryEvent.repo.name. (04 §5 config files, §5.63)
-# NOTE: python-payments-service smoke_set is real (repo built, 0.3). node-catalog-service is still a
-# placeholder — that sample repo is deferred (solo cut-line §13); build it before wiring the node path.
 defaults: &defaults
   test_timeout_seconds: 900
   install_deps: false            # opt-in per repo: build a per-run venv + pip install the repo's
@@ -37,6 +35,7 @@ repos:
 
   node-catalog-service:
     <<: *defaults
+    install_deps: true  # our own fixture (trusted) — npm install gated the same way as pip -e .
     smoke_set:
       - "test/health.test.js"
     sensitive_rules:

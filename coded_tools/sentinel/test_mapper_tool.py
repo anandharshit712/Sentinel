@@ -4,7 +4,8 @@ Maps changed + blast-radius modules to test files by precedence: coverage map (i
 test-file import graph > naming convention, then unions the repo's smoke_set. Returns a base
 TestPlan (selected + smoke_set + confidence + runtime estimate) to the test_selection_agent, which
 may LLM-add tests before contract_store persists the TestPlan. Operates on the checked-out head
-(working tree). Coverage-map parsing is deferred (import-graph covers the sample repos).
+(working tree). Coverage-map parsing is deferred (import-graph covers the sample repos, both
+Python and JS/TS).
 """
 from __future__ import annotations
 
@@ -12,17 +13,19 @@ import ast
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Dict, List, Set, Union
 
 import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
-from lib import contracts
+from lib import contracts, js_imports
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.test_mapper")
 
 _DEFAULT_PER_TEST_SECONDS = 5
+_JS_TEST_RE = re.compile(r"\.(?:test|spec)\.(?:js|jsx|ts|tsx)$", re.I)
 
 
 def _rel(root: str, path: str) -> str:
@@ -37,7 +40,9 @@ def _module(rel: str) -> str:
 
 def _is_test_file(rel: str) -> bool:
     base = rel.rsplit("/", 1)[-1]
-    return (base.startswith("test_") and base.endswith(".py")) or base.endswith("_test.py")
+    if (base.startswith("test_") and base.endswith(".py")) or base.endswith("_test.py"):
+        return True
+    return bool(_JS_TEST_RE.search(base))
 
 
 def _imports(src: str) -> Set[str]:
@@ -67,8 +72,14 @@ class TestMapperTool(CodedTool):
                 return "Error: missing/invalid repo_workspace"
             profile = sly_data.get("change_profile") or sly_data.get("change_profile_wip") or {}
 
-            changed = {_module(f["path"]) for f in profile.get("files", [])
-                       if f["path"].endswith(".py") and f.get("change_type") != "deleted"}
+            changed = set()
+            for f in profile.get("files", []):
+                if f.get("change_type") == "deleted":
+                    continue
+                if f["path"].endswith(".py"):
+                    changed.add(_module(f["path"]))
+                elif f["path"].endswith(js_imports.JS_EXTS):
+                    changed.add(js_imports.module_key(f["path"]))
             br = profile.get("blast_radius") or {}
             targets = changed | set(br.get("direct", [])) | set(br.get("transitive", []))
 
@@ -81,18 +92,31 @@ class TestMapperTool(CodedTool):
                     if not _is_test_file(rel):
                         continue
                     with open(os.path.join(dirpath, name), encoding="utf-8", errors="ignore") as fh:
-                        imps = _imports(fh.read())
+                        src = fh.read()
+                    if rel.endswith(".py"):
+                        imps = _imports(src)
+                    else:
+                        imps = js_imports.extract_relative_targets(src, js_imports.module_key(rel))
                     hit = imps & targets
                     if hit:
                         selected[rel] = {"test_id": rel, "reason": f"imports {sorted(hit)[0]}",
                                          "mapping_source": "import_graph"}
 
-            # convention fallback: tests/test_<stem>.py for each changed file
+            # convention fallback: tests/test_<stem>.py (Python) or co-located <stem>.test.{js,ts} (JS/TS)
             for f in profile.get("files", []):
-                if not f["path"].endswith(".py"):
+                path = f["path"]
+                if path.endswith(".py"):
+                    stem = path.rsplit("/", 1)[-1][:-3]
+                    cands = (f"tests/test_{stem}.py", f"test_{stem}.py")
+                elif path.endswith(js_imports.JS_EXTS):
+                    d, _, base = path.rpartition("/")
+                    stem = base.rsplit(".", 1)[0]
+                    prefix = f"{d}/" if d else ""
+                    cands = tuple(f"{prefix}{stem}.test.{ext}" for ext in ("js", "jsx", "ts", "tsx")) + \
+                            tuple(f"{prefix}__tests__/{stem}.test.{ext}" for ext in ("js", "jsx", "ts", "tsx"))
+                else:
                     continue
-                stem = f["path"].rsplit("/", 1)[-1][:-3]
-                for cand in (f"tests/test_{stem}.py", f"test_{stem}.py"):
+                for cand in cands:
                     if os.path.isfile(os.path.join(repo, cand)) and cand not in selected:
                         selected[cand] = {"test_id": cand, "reason": f"convention for {stem}",
                                           "mapping_source": "convention"}

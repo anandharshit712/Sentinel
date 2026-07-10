@@ -1,9 +1,10 @@
 """dependency_graph_tool (04 §5.3, A1) — blast radius + sensitive flags; finalizes ChangeProfile.
 
-Builds the Python import graph at head, computes the dependents (direct + transitive) of the
-changed modules, applies the repo's sensitive_rules (path globs + symbol regexes), then assembles
-the full ChangeProfile from change_profile_wip, validates it and writes it to sly_data as the
-authoritative `change_profile` contract (the finalize step of the change-analysis pipeline).
+Builds the Python (dotted-module) and JS/TS (path-based) import graphs at head, computes the
+dependents (direct + transitive) of the changed modules, applies the repo's sensitive_rules (path
+globs + symbol regexes), then assembles the full ChangeProfile from change_profile_wip, validates
+it and writes it to sly_data as the authoritative `change_profile` contract (the finalize step of
+the change-analysis pipeline).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from typing import Any, Dict, List, Set, Union
 import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
-from lib import contracts
+from lib import contracts, js_imports
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.dependency_graph")
@@ -69,8 +70,10 @@ class DependencyGraphTool(CodedTool):
             if not repo:
                 return "Error: missing repo_workspace"
 
-            py_files = [p for p in _git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
-                        if p.endswith(".py")]
+            all_files = _git(repo, "ls-tree", "-r", "--name-only", head).splitlines()
+            py_files = [p for p in all_files if p.endswith(".py")]
+            js_files = [p for p in all_files if p.endswith(js_imports.JS_EXTS)]
+
             known = {_module_of(p) for p in py_files}
             dependents: Dict[str, Set[str]] = {m: set() for m in known}
             for p in py_files:
@@ -79,8 +82,22 @@ class DependencyGraphTool(CodedTool):
                     if dep != importer:
                         dependents.setdefault(dep, set()).add(importer)
 
+            known_js = {js_imports.module_key(p) for p in js_files}
+            dependents.update({m: set() for m in known_js})
+            for p in js_files:
+                importer = js_imports.module_key(p)
+                for dep in js_imports.extract_import_targets(
+                        _git(repo, "show", f"{head}:{p}"), importer, known_js):
+                    if dep != importer:
+                        dependents.setdefault(dep, set()).add(importer)
+
             changed_files = [f for f in profile["files"] if f.get("change_type") != "deleted"]
-            changed_mods = {_module_of(f["path"]) for f in changed_files if f["path"].endswith(".py")}
+            changed_mods = set()
+            for f in changed_files:
+                if f["path"].endswith(".py"):
+                    changed_mods.add(_module_of(f["path"]))
+                elif f["path"].endswith(js_imports.JS_EXTS):
+                    changed_mods.add(js_imports.module_key(f["path"]))
 
             direct: Set[str] = set()
             for m in changed_mods:

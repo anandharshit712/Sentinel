@@ -11,3 +11,6 @@ __pycache__/
 *.pyc
 *.db          # nsflow/sqlite runtime artifacts (Sentinel uses Postgres)
 nss_local.db
+
+#node modules
+/samples/node-catalog-service/node_modules

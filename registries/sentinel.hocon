@@ -200,7 +200,7 @@ Then reply with ONE short sentence naming the classification, number of changed 
         {
             "name": "ast_analyzer",
             "function": {
-                "description": "Extracts changed/new functions and classes for the changed Python files. Inputs from shared memory; the argument is nominal.",
+                "description": "Extracts changed/new functions and classes for the changed Python/JS/TS files. Inputs from shared memory; the argument is nominal.",
                 "parameters": {"type": "object", "properties": {"reason": {"type": "string", "description": "Ignored."}}, "required": []}
             },
             "class": "sentinel.ast_analyzer_tool.AstAnalyzerTool"
@@ -242,7 +242,7 @@ Then reply with ONE short sentence naming the classification, number of changed 
         {
             "name": "complexity_metrics",
             "function": {
-                "description": "Measured cyclomatic complexity per changed Python function (base vs head delta) and length. Inputs from shared memory; argument nominal.",
+                "description": "Measured cyclomatic complexity per changed Python/JS/TS function (base vs head delta) and length. Inputs from shared memory; argument nominal.",
                 "parameters": {"type": "object", "properties": {"reason": {"type": "string", "description": "Ignored."}}, "required": []}
             },
             "class": "sentinel.complexity_metrics_tool.ComplexityMetricsTool"
