@@ -94,6 +94,7 @@ export interface RunDetail {
   env_context?: any
   risk_score?: RiskScore | null
   decision?: (DecisionContract & { reasoning_trail?: any }) | null
+  error?: string | null          // run_failed reason (present when state === 'failed')
 }
 
 export interface RunEvent {

@@ -117,7 +117,11 @@ def _clone(event: dict, run_id: str) -> str:
     ws = str(workspace.ensure_workspace(run_id))
     # full clone (local sample repos are tiny; both base/head shas must be reachable for git diff)
     # ponytail: full clone; switch to --filter=blob:none partial clone if a big repo shows up
-    subprocess.run(["git", "clone", "--quiet", url, ws], check=True, capture_output=True, text=True)
+    # -c core.longpaths=true: survive Windows MAX_PATH (260) on deeply-nested repos (exit 128)
+    r = subprocess.run(["git", "-c", "core.longpaths=true", "clone", "--quiet", url, ws],
+                       capture_output=True, text=True)
+    if r.returncode != 0:  # surface git's real stderr, not just the exit code (e.g. "Filename too long")
+        raise RuntimeError(f"git clone failed (exit {r.returncode}): {(r.stderr or r.stdout or '').strip()[:400]}")
     return ws
 
 
@@ -261,6 +265,10 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
     run = dao.get_run(run_id)
     if not run:
         raise HTTPException(404, "run not found")
+    error = None
+    if run.get("state") == "failed":  # surface the durable run_failed reason (audit log)
+        error = next((a["payload"].get("error") for a in dao.list_audit(run_id)
+                      if a.get("action") == "run_failed" and a.get("payload")), None)
     return {
         "run": run,
         "review_report": (dao.get_payload("review_reports", run_id) or {}).get("payload"),
@@ -269,6 +277,7 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
         "env_context": (dao.get_payload("env_contexts", run_id) or {}).get("payload"),
         "risk_score": (dao.get_payload("risk_scores", run_id) or {}).get("payload"),
         "decision": dao.get_decision(run_id),
+        "error": error,
     }
 
 

@@ -22,7 +22,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   if (loading && !data) return <div className="p-6 text-[var(--ink-dim)]">Loading {id}…</div>
   if (error) return <div className="p-6 text-red-400">Error: {error}</div>
   if (!data) return null
-  const { run, review_report, test_plan, test_results, risk_score, decision } = data
+  const { run, review_report, test_plan, test_results, risk_score, decision, error: failReason } = data
   const state = (liveState || run.state) as RunState
   const prodGate = run.to_env === 'production'
   const dec = decision?.decision ?? run.decision
@@ -46,6 +46,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
 
       <NetworkCard state={state} events={events} decision={dec} />
 
+      {state === 'failed' && <FailureCard error={failReason} events={events} />}
       {decision && <DecisionCard d={decision} prodGate={prodGate} runId={id} onResolved={refetch} />}
       {risk_score && <RiskScoreCard r={risk_score} />}
       {review_report && <ReviewReportCard r={review_report} />}
@@ -53,6 +54,28 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
       {test_plan && <TestPlanCard r={test_plan} />}
       {!decision && <p className="text-sm text-[var(--ink-dim)]">No decision yet — pipeline running.</p>}
     </div>
+  )
+}
+
+function FailureCard({ error, events }: { error?: string | null; events: any[] }) {
+  // durable reason from the detail endpoint; fall back to the last streamed error/message
+  const streamErr = [...events].reverse().find(e => e.kind === 'state_change' && e.error)?.error
+  const lastMsg = [...events].reverse().find(e => e.text)?.text
+  const reason = error || streamErr || lastMsg || ''
+  const isClone = /git.*clone|clone.*128|exit status 128/i.test(reason)
+  return (
+    <Card title="Run Failed" right={<span className="rounded-sm border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-300">no decision</span>}>
+      <p className="text-sm text-red-300">The pipeline stopped before producing a decision.</p>
+      {isClone && <p className="mt-1 text-[11px] text-[var(--ink-dim)]">Repository clone failed — check the URL is public and both SHAs are reachable on the default branch. On Windows, a deeply-nested repo can exceed the 260-char path limit.</p>}
+      {reason ? (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-[var(--ink-dim)] hover:text-[var(--signal)]">why it failed</summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-red-500/30 bg-red-500/5 p-2 text-[11px] text-red-200">{reason}</pre>
+        </details>
+      ) : (
+        <p className="mt-2 text-[11px] text-[var(--ink-dim)]">No error detail recorded.</p>
+      )}
+    </Card>
   )
 }
 
@@ -253,10 +276,18 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
       {r.cases && r.cases.length > 0 && (
         <ul className="mt-3 max-h-44 space-y-1 overflow-auto border-t border-[var(--line-soft)] pt-2">
           {r.cases.map((c, i) => (
-            <li key={i} className="flex items-center gap-2 text-[11px]">
-              <i className={`h-1.5 w-1.5 rounded-full ${statusColor[c.status] || 'bg-slate-500'}`} />
-              <code className="text-[var(--ink)]">{c.test_id}</code>
-              <span className="ml-auto text-[var(--ink-dim)]">{c.duration_ms}ms</span>
+            <li key={i} className="text-[11px]">
+              <div className="flex items-center gap-2">
+                <i className={`h-1.5 w-1.5 rounded-full ${statusColor[c.status] || 'bg-slate-500'}`} />
+                <code className="text-[var(--ink)]">{c.test_id}</code>
+                <span className="ml-auto text-[var(--ink-dim)]">{c.duration_ms}ms</span>
+              </div>
+              {c.failure_message && (c.status === 'failed' || c.status === 'error') && (
+                <details className="ml-3.5 mt-0.5">
+                  <summary className="cursor-pointer text-[10px] uppercase tracking-wide text-red-300/70 hover:text-red-300">why it failed</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-red-500/30 bg-red-500/5 p-2 text-[11px] text-red-200">{c.failure_message}</pre>
+                </details>
+              )}
             </li>
           ))}
         </ul>

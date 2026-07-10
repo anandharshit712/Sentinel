@@ -57,6 +57,11 @@ Set-Location $Root
 $env:PYTHONPATH = '.'
 $env:GATEWAY_PORT = '8000'
 
+# Windows MAX_PATH (260): deeply-nested repos fail `git clone` with exit 128 ("Filename too long").
+# core.longpaths lets git use extended-length paths. --global needs no admin; covers all clones this user runs.
+try { git config --global core.longpaths true; Write-Host '==> git core.longpaths enabled (long-path clones)' -Foreground Cyan }
+catch { Write-Host '  (could not set git core.longpaths — is git on PATH?)' -Foreground Yellow }
+
 # --- 1. DB schema (idempotent) ----------------------------------------------
 Write-Host '==> DB migrate (alembic upgrade head)' -Foreground Cyan
 & $Py -m alembic -c db\alembic.ini upgrade head
