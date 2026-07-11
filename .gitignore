@@ -6,6 +6,7 @@ graphify-out/
 
 # secrets & runtime
 .env
+PENDING.md      # local-only post-hackathon issue tracker (see CLAUDE.md)
 logs/
 __pycache__/
 *.pyc
