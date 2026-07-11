@@ -28,6 +28,12 @@ from lib import triage
 logger = logging.getLogger("coded_tools.secret_scanner")
 
 _LEGACY_CAP = 300  # no-plan fallback: ranked top-N lines handed to the LLM
+# Cap the deterministic findings RETURNED to a reviewer LLM. A whole-repo audit of a vulnerable repo
+# yields thousands of sink hits per shard; returning them all (×4 reviewers, accumulating in one
+# frontman conversation) blew past the model's 262k-token context -> HTTP 400 -> run failed. The LLM
+# only needs a representative sample + the ranked snippets; report_publisher recomputes the FULL
+# deterministic floor in code (_floor_findings), so nothing is lost from the final report.
+_LLM_FINDINGS_CAP = 50
 
 # (category, regex, cwe, title) — specific rules first; one secret finding per line, first match wins.
 _RULES: List[Tuple[str, "re.Pattern", str, str]] = [
@@ -136,7 +142,10 @@ class SecretScannerTool(CodedTool):
                 sly_data.setdefault("review_coverage", {})[str(shard)] = coverage
                 logger.info("run %s: secret_scanner shard %s — %d finding(s), %d/%d snippet(s)",
                             run_id, shard, len(findings), len(snippets), len(scoped))
-                return {"findings": findings, "review_snippets": snippets, "coverage": coverage}
+                # cap findings to the LLM (context safety); the full floor is recomputed in code by
+                # report_publisher._floor_findings, so the report keeps every one.
+                return {"findings": findings[:_LLM_FINDINGS_CAP], "findings_total": len(findings),
+                        "review_snippets": snippets, "coverage": coverage}
 
             logger.info("run %s: secret_scanner %d finding(s), %d added line(s)",
                         run_id, len(findings), len(scoped))
