@@ -2,6 +2,8 @@
 
 **Multi-Agent Code Review · Smart Test Selection · Explainable Promotion Gating — built on [Neuro-SAN](https://github.com/cognizant-ai-lab/neuro-san).**
 
+**Author:** Harshit Anand
+
 Cognizant Internal Hackathon project. One Neuro-SAN agent network acts as a connected intelligence layer across the delivery lifecycle (**review → test → promote**), where the output of each stage becomes a risk signal for the next: a Critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — _even when every test passes_.
 
 ## The Problems
@@ -27,6 +29,17 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with prov
 ```text
 .
 ├── README.md                          ← you are here
+├── architecture.md                    # one-page architecture overview
+├── summary.md                         # project summary
+├── coded_tools/sentinel/              # 19 deterministic coded tools
+├── registries/                        # agent network HOCON (sentinel.hocon + manifest)
+├── gateway/                           # Delivery Gateway (FastAPI: REST + SSE)
+├── frontend/                          # Decision Dashboard SPA (React 19 + Vite)
+├── db/                                # Alembic migrations + SQLAlchemy models (schema sentinel)
+├── lib/                               # contracts, redaction, workspace, language parsers
+├── config/                            # risk/ladder/repo + LLM config
+├── scripts/                           # run_server, run_gateway, run_repo, verify_*
+├── samples/                           # sample repos (python-payments-service, node-catalog-service)
 ├── docs/
 │   ├── hackathon-delivery-intelligence.md   # original problem statement & idea (source doc)
 │   └── solution/                      # full design documentation set (start here)
@@ -35,7 +48,9 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with prov
 │       ├── 02-dfd.md                  # data flow diagrams L0/L1/L2 + data dictionary
 │       ├── 03-hld.md                  # high-level design (deployment, security, scale, ADRs)
 │       ├── 04-lld.md                  # low-level design (HOCON, coded tools, DDL, APIs)
-│       └── 05-architecture-diagram.md # six architecture views
+│       ├── 05-architecture-diagram.md # six architecture views
+│       ├── 06-frontend-design.md      # dashboard SPA design
+│       └── 07-implementation-plan.md  # phased build plan
 └── neuro-san-studio/                  # clone of cognizant-ai-lab/neuro-san-studio
                                        # (framework reference: examples, docs, tooling)
 ```
@@ -48,8 +63,10 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with prov
 | [01 · Proposed Solution](docs/solution/01-proposed-solution.md) | What the system is and exactly how it works: 10-component agent network, risk formula, trust ladder, data contracts                          |
 | [02 · DFD](docs/solution/02-dfd.md)                             | How data moves: context → system → subsystem drill-downs, flow invariants                                                                    |
 | [03 · HLD](docs/solution/03-hld.md)                             | How it deploys and survives: K8s + docker-compose, security model, failure modes, design decisions                                           |
-| [04 · LLD](docs/solution/04-lld.md)                             | How to build it: full network HOCON, 19 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
+| [04 · LLD](docs/solution/04-lld.md)                             | How to build it: full network HOCON, 19 coded-tool specs, PostgreSQL DDL, Gateway API + GitHub Action gate                                   |
 | [05 · Architecture](docs/solution/05-architecture-diagram.md)   | The pictures: landscape, containers, agent topology, signal flow, deployments                                                                |
+| [06 · Frontend Design](docs/solution/06-frontend-design.md)     | Decision Dashboard SPA: stack, routes, components, data/SSE layer, design system                                                            |
+| [07 · Implementation Plan](docs/solution/07-implementation-plan.md) | Contract-first phased build: tracer bullet, tracks A–D, milestones, risk register                                                       |
 
 All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown Preview Mermaid Support extension).
 
@@ -57,7 +74,7 @@ All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown P
 
 ```mermaid
 flowchart LR
-    CI["GitHub Actions / Jenkins / GitLab CI"] -->|webhook| GW["Delivery Gateway<br/>(FastAPI)"]
+    CI["GitHub Actions"] -->|PR gate| GW["Delivery Gateway<br/>(FastAPI)"]
     GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>sentinel<br/>adaptive agents + 19 coded tools"]
     NS -->|"NIM llama-3.3-70b"| NIM["NVIDIA NIM"]
     NS --> PG[("PostgreSQL<br/>risk history + audit")]
@@ -66,7 +83,7 @@ flowchart LR
     GW -->|"gate status / promote / comment"| CI
 ```
 
-Ten pipeline components: `delivery_coordinator` (frontman) → `change_analysis` → `security_review` ∥ `code_quality` ∥ `environment_context` → `review_synthesis` → `test_selection` → `test_runner` (CodedTool) → `risk_scoring` → `promotion_gating`.
+Pipeline (frontman + up to 12 agents, one tool call at a time): `delivery_coordinator` (frontman) → `change_analysis` → `review_planner` (CodedTool) → `security_reviewer_1..4` → `senior_security` → `code_quality` → `report_publisher` (CodedTool) → `test_selection` → `test_runner` (CodedTool) → `environment_context` → `risk_scoring` → `promotion_gating`.
 
 ## Demo Scenarios (hackathon MVP)
 
@@ -76,7 +93,7 @@ Ten pipeline components: `delivery_coordinator` (frontman) → `change_analysis`
 ## Quickstart (host-native dev)
 
 Prereqs: Python 3.12 + `.venv` (neuro-san 0.6.71), local PostgreSQL 17 (schema `sentinel`,
-`DATABASE_URL` in `.env`), Node 20+, an `NVIDIA_API_KEY` in `.env`. Live tracker: [TASKS.md](TASKS.md).
+`DATABASE_URL` in `.env`), Node 20+, an `NVIDIA_API_KEY` in `.env`.
 
 **One command (Windows):** `.\run.ps1` — migrates the DB, builds the dashboard, starts both
 servers, opens http://localhost:8000/. Flags: `-Demo` (run both demo runs after startup),
@@ -112,11 +129,11 @@ PYTHONPATH=. .venv/Scripts/python scripts/demo_live.py
 # open the printed http://localhost:8000/runs/<id> immediately
 ```
 
-Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (48: 43 coded-tool + 5 gateway).
+Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (85).
 
 ## Running on real repos
 
-Full step-by-step (localhost + public-URL paths, real tests, troubleshooting): **[RUNNING_ON_REPOS.md](RUNNING_ON_REPOS.md)**. Quickest try against any public repo:
+Quickest try against any public repo:
 
 ```powershell
 $env:PYTHONPATH="."; .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo
@@ -147,7 +164,7 @@ Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gat
 - ✅ **Implementation** (host-native): 19 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
 - ✅ **Audit mode + adaptive security fan-out**: `scripts/run_repo.py --full` runs the whole pipeline over any public repo; `review_planner` sizes 1–4 parallel `security_reviewer_*` by hotspot volume; `report_publisher` reports honest deep-review coverage (`scripts/verify_audit.py`).
 - ✅ GitHub Action gate for real repos ([`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml)) — PRs post to `/api/v1/simulate`, check fails unless `promote`.
-- ⬜ Phase 6 hardening + in-browser rehearsal (see [TASKS.md](TASKS.md)).
+- ⬜ Phase 6 hardening + in-browser rehearsal.
 
 ## Framework Reference
 

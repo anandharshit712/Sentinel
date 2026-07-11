@@ -1,10 +1,12 @@
 # Sentinel — Architecture
 
+**Author:** Harshit Anand
+
 ## What we're building
 
 Three delivery gates are broken today and disconnected from each other: code review is a slow, inconsistent human bottleneck; CI re-runs the full test suite on every change regardless of size; and promotion is a binary pass/fail with no risk weighting or reasoning trail. Because the gates don't talk to each other, a critical security finding in review has zero effect on whether a change gets promoted — as long as the (unrelated) tests are green, it ships.
 
-**Sentinel** is an AI delivery intelligence layer that sits beside existing CI/CD (GitHub Actions, Jenkins, GitLab CI — augments, never replaces) and connects the three gates into one pipeline: **review → test → promote**, where the output of each stage becomes a risk signal for the next. A critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — even when every test passes.
+**Sentinel** is an AI delivery intelligence layer that sits beside existing CI/CD (GitHub Actions — augments, never replaces) and connects the three gates into one pipeline: **review → test → promote**, where the output of each stage becomes a risk signal for the next. A critical security finding raised in review mechanically raises the promotion risk score and can force human escalation — even when every test passes.
 
 ## How it achieves that — the agentic system
 
@@ -76,7 +78,7 @@ Bands: 0–24 low · 25–49 medium · 50–74 high · 75–100 critical. Every 
 
 ```mermaid
 flowchart LR
-    CI["GitHub Actions / Jenkins / GitLab CI"] -->|webhook or gate step| GW["Delivery Gateway (FastAPI)"]
+    CI["GitHub Actions"] -->|gate step| GW["Delivery Gateway (FastAPI)"]
     GW -->|streaming_chat, sly_data| NS["Neuro-SAN server — network: sentinel"]
     NS --> PG[("PostgreSQL — runs, findings, scores, decisions, approvals")]
     GW --> PG
@@ -84,7 +86,7 @@ flowchart LR
     NS -->|LLM inference| NIM["NVIDIA NIM"]
 ```
 
-- **Delivery Gateway** (`gateway/`, FastAPI, `:8000`) — accepts a `DeliveryEvent` (from a webhook, a manual submit, or a GitHub Action), clones the repo server-side, invokes the agent network, streams progress over SSE, and persists the allow-listed contracts (`review_reports`, `decisions`, and — since only those two are tool-persisted — `risk_score` / `test_results` / `test_plan` / `env_context` extracted from the returned `sly_data` on finalize). Also runs the approval queue, audit log, and run-compare API.
+- **Delivery Gateway** (`gateway/`, FastAPI, `:8000`) — accepts a `DeliveryEvent` (from a manual submit or a GitHub Action), clones the repo server-side, invokes the agent network, streams progress over SSE, and persists the allow-listed contracts (`review_reports`, `decisions`, and — since only those two are tool-persisted — `risk_score` / `test_results` / `test_plan` / `env_context` extracted from the returned `sly_data` on finalize). Also runs the approval queue, audit log, and run-compare API.
 - **Neuro-SAN server** (`:8080`) — the sole multi-agent orchestrator, running the `sentinel` network end to end.
 - **PostgreSQL** (schema `sentinel`) — runs, findings, risk history, decisions, approvals, review plans; the durable record behind every dashboard view.
 - **Dashboard SPA** (`frontend/`, React 19 + Vite + Tailwind, plain fetch/EventSource) — Runs list, Run detail (live agent-network graph + stage timeline + review/test/risk/decision cards), Approvals (mandatory reject comment), Audit, Run compare.

@@ -1,12 +1,14 @@
 # Sentinel — Project Summary
 
+**Author:** Harshit Anand
+
 ## The problem
 
 Software delivery today runs through three gates that don't talk to each other. Code review is a slow, inconsistent human bottleneck — hours to days per change, quality dependent on who happens to be available. CI reruns the entire test suite on every change, so cost and latency scale with repo size, not with how much actually changed. Promotion is binary pass/fail: no risk weighting, no context, no reasoning trail for why a change was allowed through. Worst of all, these three gates are disconnected — a critical security finding surfaced in review has no bearing on the promotion decision as long as an unrelated test suite is green. A hardcoded credential or a SQL injection can ship simply because nothing wires review output into promotion policy.
 
 ## The solution
 
-Sentinel is an AI delivery intelligence layer that sits beside existing CI/CD (GitHub Actions, Jenkins, GitLab CI — it augments them, it doesn't replace them) and connects review, test selection, and promotion into a single reasoning chain:
+Sentinel is an AI delivery intelligence layer that sits beside existing CI/CD (GitHub Actions — it augments, it doesn't replace) and connects review, test selection, and promotion into a single reasoning chain:
 
 1. **Multi-agent first-pass review** — specialist agents produce a severity-ranked, deduplicated review report in seconds, with a security-review fan-out that adaptively scales from one to four reviewer shards based on how much changed, plus a senior-agent executive summary.
 2. **Smart test selection** — a deterministic diff + dependency-graph + test-mapping pipeline selects the relevant test subset plus an always-on smoke set, then runs the project's *own* real test runner (`pytest`, `jest`) — not a mock, not a simulation.
