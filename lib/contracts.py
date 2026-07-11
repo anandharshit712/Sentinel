@@ -1,6 +1,6 @@
 """Sentinel data contracts (04 §4) — the frozen integration interface.
 
-Single source of truth for the 9 inter-agent contracts. Every track validates and
+Single source of truth for the inter-agent contracts (11 schemas / 16 keys). Every track validates and
 builds against these schemas + fixtures rather than against each other's code (07 §1.1).
 Contract changes start in 01 then propagate (repo rule 1).
 
@@ -59,7 +59,7 @@ def _contract(payload_props: dict, payload_required: list[str]) -> dict:
 _EVENT = _contract(
     {
         "event_id": _S,
-        "source": {"enum": ["github", "jenkins", "gitlab", "manual"]},
+        "source": {"enum": ["github", "manual"]},
         "repo": {
             "type": "object",
             "properties": {"url": _S, "name": _S, "default_branch": _S},

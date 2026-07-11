@@ -1,5 +1,7 @@
 # Sentinel — Data Flow Diagrams (DFD)
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) (authoritative). Companion documents: [HLD](03-hld.md), [LLD](04-lld.md), [Architecture](05-architecture-diagram.md).
 **Levels:** L0 (context) → L1 (system decomposition) → L2 (drill-down of processes 2, 3, 4 and 5).
 
@@ -26,7 +28,7 @@ The system boundary is the **Sentinel** (Gateway + Neuro-SAN `sentinel` network 
 ```mermaid
 flowchart LR
     E1["E1 Developer"]
-    E2["E2 CI/CD Platform<br/>(GitHub Actions / Jenkins / GitLab CI)"]
+    E2["E2 CI/CD Platform<br/>(GitHub Actions)"]
     E3["E3 Release Manager / Approver"]
     E4["E4 Git Hosting Service<br/>(repo content)"]
     E5["E5 NVIDIA NIM LLM Endpoint<br/>(hosted or self-hosted)"]

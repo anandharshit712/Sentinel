@@ -1,5 +1,7 @@
 # Sentinel — Architecture Diagrams
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) · [HLD](03-hld.md) (structure) · [LLD](04-lld.md) (element names). Six views; each states what it shows and the invariants it makes visible. Element names match the LLD exactly.
 
 | View                              | Question it answers                                  |
@@ -22,8 +24,6 @@ flowchart TB
 
     subgraph PLATFORMS["Existing CI/CD (unchanged — D1: augment, don't replace)"]
         GHA["GitHub Actions"]
-        JEN["Jenkins"]
-        GLC["GitLab CI"]
     end
 
     GIT["Git Hosting"]
@@ -64,7 +64,7 @@ flowchart TB
         NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: sentinel<br/>19 coded tools (AGENT_TOOL_PATH)"]
         RUN["Test Runner Sandbox<br/>subprocess (demo) /<br/>ephemeral K8s Job (prod)"]
         NF["NSFlow · :4173<br/>agent visualization"]
-        PG[("PostgreSQL 16 · :5432<br/>runs · findings · scores ·<br/>decisions · approvals · audit")]
+        PG[("PostgreSQL 17 · :5432<br/>runs · findings · scores ·<br/>decisions · approvals · audit")]
         WS[/"Workspace volume (RWX)<br/>ephemeral clones"/]
     end
 
@@ -155,7 +155,7 @@ Invariants visible: exactly one frontman; specialists own only their leaf tools 
 ```mermaid
 flowchart LR
     subgraph S1["Review stage"]
-        F["2 Critical findings:<br/>SQL injection + hardcoded secret<br/>in auth module<br/>(security_review_agent)"]
+        F["2 Critical findings:<br/>SQL injection + hardcoded secret<br/>in auth module<br/>(security_reviewer → report_publisher)"]
     end
     subgraph S2["Test stage"]
         T["All selected tests PASS<br/>(test_runner)"]
@@ -177,6 +177,8 @@ flowchart LR
 Binary CI gating sees only the green box and promotes. This system promotes the red box's signal across stage boundaries mechanically (`review_report` is a structural input to `risk_calculator` — DFD invariant 3). This is Demo Run 2 on one slide.
 
 ## V5 — Production Deployment (Kubernetes, cloud-agnostic)
+
+> **Status: specified, not yet built** — post-hackathon packaging. No K8s manifests, Dockerfiles, or compose file exist today (dev is host-native, no Docker); this view is the target topology.
 
 ```mermaid
 flowchart TB
@@ -223,6 +225,8 @@ flowchart TB
 Security posture visible: sandbox zone isolated by NetworkPolicy; secrets never reach Jobs; self-hosted NIM keeps code in-cluster (QA8); single TLS entry point.
 
 ## V6 — Hackathon Deployment (docker-compose)
+
+> **Status: specified, not yet built** — dev is currently host-native (local Postgres 17, `run.ps1` launcher, no Docker). This compose view is the target packaging.
 
 ```mermaid
 flowchart LR

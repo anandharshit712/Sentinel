@@ -1,5 +1,7 @@
 # Sentinel — High-Level Design (HLD)
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) (authoritative solution spec). Companions: [DFD](02-dfd.md) · [LLD](04-lld.md) · [Architecture Diagram](05-architecture-diagram.md).
 **Scope:** system-level structure, deployment, integration, data, security, scalability, availability, observability, and the design decisions binding the LLD.
 
@@ -15,7 +17,7 @@
 | QA4 | Safety            | Zero unauthorized production deploys; LLM cannot lower risk                     | Hard-coded prod floor in `trust_ladder_tool`; raise-only LLM escalation          |
 | QA5 | Scalability       | Horizontal scale to org-wide concurrent runs                                    | Stateless Gateway & Neuro-SAN pods; per-run isolation; HPA                       |
 | QA6 | Adoptability      | Team onboarding = configuration only (webhook + repo config entry)              | Gateway adapters; no pipeline migration (D1 principle)                           |
-| QA7 | Portability       | Any of GitHub Actions / Jenkins / GitLab CI; any K8s; NIM hosted or self-hosted | Adapter interface (GitHub implemented in hackathon scope; Jenkins/GitLab specified as extension contracts, [01 §12](01-proposed-solution.md)); cloud-agnostic manifests; `nvidia` provider class + fallbacks |
+| QA7 | Portability       | GitHub Actions; any K8s; NIM hosted or self-hosted | single Gateway ingest (GitHub Action → /api/v1/simulate); adapter interface (D6) leaves room for other platforms post-hackathon; cloud-agnostic manifests (specified, not yet built); `nvidia` provider class + fallbacks |
 | QA8 | Data privacy      | Code and credentials never leave controlled boundaries                          | `sly_data` allow-lists; self-hosted NIM option; ephemeral workspaces             |
 
 ## 2. System Context
@@ -30,7 +32,7 @@ See [DFD L0](02-dfd.md#1-level-0--context-diagram). Boundary: **Delivery Gateway
 flowchart TB
     subgraph P1["Integration Plane — Delivery Gateway (FastAPI)"]
         direction LR
-        WH["Webhook Receivers<br/>github | jenkins | gitlab"]
+        WH["HTTP Ingest<br/>POST /api/v1/simulate"]
         NORM["Event Normalizer<br/>→ DeliveryEvent"]
         WS["Workspace Manager<br/>(shallow clone, cleanup)"]
         INV["Network Invoker<br/>(neuro-san HTTP client)"]
@@ -42,12 +44,12 @@ flowchart TB
     subgraph P2["Intelligence Plane — Neuro-SAN Server"]
         direction LR
         REG["Registry: sentinel.hocon<br/>(manifest.hocon)"]
-        AG["up to 13 LLM agents (1–4 of 4 reviewers)<br/>+ 19 coded tools<br/>(AGENT_TOOL_PATH)"]
+        AG["up to 12 LLM agents (1–4 of 4 reviewers)<br/>+ 19 coded tools<br/>(AGENT_TOOL_PATH)"]
         LLM["llm_config: NIM primary<br/>+ fallbacks"]
     end
 
     subgraph P3["Data & Presentation Plane"]
-        PG[("PostgreSQL 16")]
+        PG[("PostgreSQL 17")]
         UI["Dashboard SPA (static)"]
         NF["NSFlow (port 4173)"]
     end
@@ -94,7 +96,7 @@ flowchart TB
 ### 4.1 Delivery Gateway (FastAPI, Python 3.12+)
 
 Modules (LLD §7 specifies routes/classes):
-`webhooks/` (GitHub receiver + verifier in hackathon scope; Jenkins/GitLab receivers post-hackathon) · `adapters/` (inbound normalize, outbound act — one class per platform implementing `CicdAdapter`) · `workspace/` (clone/cleanup, disk quota) · `invoker/` (neuro-san HTTP streaming client, retry, timeout) · `runs/` (state machine: `received → analyzing → reviewing → testing → scoring → gated → done/failed`) · `approvals/` · `api/` (REST + SSE) · `db/` (SQLAlchemy DAO + Alembic migrations) · `static/` (dashboard SPA).
+`api/` (single REST ingest `POST /api/v1/simulate` + SSE, bearer-token auth) · `workspace/` (clone/cleanup, disk quota) · `invoker/` (neuro-san HTTP streaming client, retry, timeout) · `runs/` (state machine: `received → analyzing → reviewing → testing → scoring → gated → done/failed`) · `approvals/` · `db/` (SQLAlchemy DAO + Alembic migrations) · `static/` (dashboard SPA).
 
 Statelessness: no in-memory run state survives a request; everything is Postgres-backed → any replica serves any request; SSE reconnects replay from persisted progress events.
 
@@ -181,11 +183,13 @@ Network guards: `max_execution_seconds` set to 3600 (default 120 s would kill te
 
 ## 6. Deployment Architecture
 
-### 6.1 Hackathon topology (docker-compose)
+> **Status:** the docker-compose and Kubernetes topologies below are **specified, not yet built** — post-hackathon packaging. No `deploy/` dir, docker-compose file, Dockerfiles, or K8s manifests exist today; the move is config-only.
+
+### 6.1 Hackathon topology (docker-compose — specified, not yet built)
 
 Services (one network, one volume set): `gateway` (8000; mounts workspace volume), `neuro-san` (8080 HTTP/30011 gRPC; same workspace volume; `coded_tools`+`registries` baked in), `postgres` (5432, named volume, migration job on start), `nsflow` (4173 → neuro-san). NIM = hosted endpoint (only `NVIDIA_API_KEY` leaves the machine). Compose file: LLD §10.1.
 
-### 6.2 Production topology (Kubernetes, cloud-agnostic)
+### 6.2 Production topology (Kubernetes, cloud-agnostic — specified, not yet built)
 
 ```mermaid
 flowchart TB
@@ -233,7 +237,7 @@ Decisions: Gateway and neuro-san scale independently (webhook bursts vs LLM-boun
 
 | Layer            | Control                                                                                                                                                                                                                        |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Ingress          | TLS everywhere; webhook endpoints verify GitHub HMAC-SHA256 / GitLab secret token / Jenkins shared token; timestamp replay-window; per-platform allow-list optional                                                            |
+| Ingress          | TLS everywhere; the /api/v1/simulate endpoint authenticates callers via bearer token (SENTINEL_TOKEN); per-caller allow-list optional                                                            |
 | AuthN (humans)   | OIDC (company SSO) on dashboard/API; hackathon fallback: static bearer token                                                                                                                                                   |
 | AuthZ            | Roles `viewer / approver / admin`; approver required for F16; role checks server-side in Gateway                                                                                                                               |
 | Secrets          | K8s Secrets (or External Secrets → vault); git token is per-repo, read-only scope; secrets enter the network only via `sly_data`; `to_upstream` allow-list excludes them (verified invariant, DFD §5)                          |
@@ -246,7 +250,7 @@ Decisions: Gateway and neuro-san scale independently (webhook bursts vs LLM-boun
 
 ## 8. Data Architecture
 
-- **Postgres 16 everywhere** (compose service ↔ managed instance; identical schema via Alembic migrations owned by Gateway).
+- **Postgres 17 everywhere** (compose service ↔ managed instance; identical schema via Alembic migrations owned by Gateway).
 - Entity spine: `runs 1—1 review_reports 1—n findings; runs 1—1 test_plans/test_results; runs 1—1 env_contexts/risk_scores/decisions; decisions 1—n approvals; decisions 1—n outcomes; incidents(repo, env, occurred_at)` — full DDL LLD §8.
 - Contracts stored as typed columns for query-critical fields + full JSONB payload (schema-versioned) for fidelity/replay.
 - Retention: run artifacts default 180 d (configurable); audit_events retained per compliance policy; workspaces hours.
@@ -314,7 +318,7 @@ Decisions: Gateway and neuro-san scale independently (webhook bursts vs LLM-boun
 | Gateway/API    | Python 3.12+, FastAPI, SQLAlchemy + Alembic, httpx                                                                                                              |
 | Analysis tools | GitPython/git CLI, tree-sitter (+ language packs), radon; OSV.dev API                                                                                           |
 | Test execution | Native runners (pytest, jest/npm; extension table 01 §9), JUnit-XML/JSON parsing                                                                                |
-| Data           | PostgreSQL 16 (JSONB contracts + typed columns)                                                                                                                 |
+| Data           | PostgreSQL 17 (JSONB contracts + typed columns)                                                                                                                 |
 | UI             | Dashboard SPA (static, Gateway-served) + SSE; NSFlow `0.6.16` line                                                                                              |
 | Deploy         | Docker images (python:3.13-slim base per stock Dockerfile pattern), docker-compose (demo), Kubernetes + HPA + Jobs (prod)                                       |
 | Observability  | JSON logging (logging.hocon), Phoenix/Langfuse OTEL plugins, Prometheus metrics                                                                                 |

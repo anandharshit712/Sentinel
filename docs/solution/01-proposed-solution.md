@@ -1,5 +1,7 @@
 # Sentinel — Proposed Solution Specification
 
+**Author:** Harshit Anand
+
 **Project:** Sentinel (Multi-Agent Code Review + Smart Test Selection + Explainable Promotion Gating)
 **Framework:** Neuro-SAN (sole multi-agent orchestrator)
 **Context:** Cognizant Internal Hackathon
@@ -32,7 +34,7 @@ Every code change travels the same road — **review → test → promote** — 
 
 | #   | Principle                                    | Concrete meaning                                                                                                                                                                                                                                                                                                                  |
 | --- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1  | **Augment, don't replace**                   | The system is an intelligence stage plugged into existing CI/CD (GitHub Actions, Jenkins, GitLab CI). It is not a CI engine, not a replacement for human reviewers. Teams keep their tooling.                                                                                                                                     |
+| D1  | **Augment, don't replace**                   | The system is an intelligence stage plugged into existing CI/CD (GitHub Actions). It is not a CI engine, not a replacement for human reviewers. Teams keep their tooling.                                                                                                                                     |
 | D2  | **LLM reasons, code decides**                | Every decision that must be auditable or safe is made by deterministic coded tools: the risk score is a fixed weighted formula, the trust ladder is a policy engine, test execution is a subprocess wrapper. LLM agents interpret, explain, contextualize, and handle edge cases — and may only _escalate_ risk, never reduce it. |
 | D3  | **Language & framework agnostic — honestly** | The system detects each project's own tooling from manifest files (`requirements.txt`/`pyproject.toml`, `package.json`, `pom.xml`, `go.mod`, …) and invokes the **project's own test commands**, reasoning over the output. It never reimplements a test framework.                                                               |
 | D4  | **Security by default**                      | Repo credentials, raw workspaces and structured stage payloads travel in Neuro-SAN's `sly_data` channel — invisible to LLMs and, by default, never leaving the agent network. Only explicitly allow-listed keys return to the caller.                                                                                             |
@@ -48,8 +50,6 @@ The solution consists of exactly three cooperating planes. Everything in every d
 flowchart LR
     subgraph IP["1 — Integration Plane"]
         GH["GitHub Actions"] --- GW
-        JK["Jenkins"] --- GW
-        GL["GitLab CI"] --- GW
         GW["Delivery Gateway<br/>(FastAPI service)"]
     end
     subgraph INTP["2 — Intelligence Plane"]
@@ -203,7 +203,7 @@ Each **`security_reviewer_n`** (LLM agent; the frontman invokes only those the p
 
 The deterministic **detection floor** (secrets + sink rules) covers 100% of in-scope lines regardless of repo size; the LLM's deep review is what scales with the budget. `report_publisher` (#5) reports honest **coverage** (`total_added_lines`, `llm_reviewed_lines`, `deterministic_coverage_pct`, `unscanned_shards`) so a full-repo audit never reads as "everything was deep-reviewed" when it wasn't.
 
-> _Backport note (2026-07-11):_ this section supersedes the former single `security_review_agent`. Item #5 below (`review_synthesis_agent`) was likewise already realized in code as the deterministic `report_publisher` tool — its finding-merge now also folds in the per-shard contracts (see §5.4).
+> _Backport note (2026-07-11):_ this section supersedes the former single `security_review_agent` (now the 1–4 `security_reviewer_*` fan-out). Synthesis is not an LLM agent: the former `review_synthesis_agent` is realized in code as the deterministic `report_publisher_tool` (#5 below), whose finding-merge folds in the per-shard contracts (see §5.4).
 
 #### 4. ✅ `code_quality_agent`
 
@@ -215,15 +215,15 @@ The deterministic **detection floor** (secrets + sink rules) covers 100% of in-s
 | Produces   | **`quality_findings`** contract (incl. `quality_score` 0–100) → sly_data                                                                                                                                                                                                                              |
 | Behavior   | Checks SOLID adherence, DRY violations, naming/readability, error-handling gaps, complexity regressions (tool-measured, not guessed), and missing tests on new functions (cross-checks `change_profile.new_functions` against test-file changes in the same diff). Suggestions carry line references. |
 
-#### 5. 📋 `review_synthesis_agent`
+#### 5. 📋 `report_publisher_tool` (deterministic — not an LLM agent)
 
 |            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| LLM        | `nvidia-llama-3.3-70b-instruct`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| CodedTools | `report_publisher_tool` (persists report to Postgres; optionally posts PR comment / MR note via Gateway)                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Consumes   | `security_findings`, `quality_findings`, `change_profile`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Type       | CodedTool (no LLM). The former `review_synthesis_agent` is realized directly in code (rule D2) — synthesis is deterministic, never LLM-authored.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| CodedTools | itself (`report_publisher_tool`) — persists the report to Postgres                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Consumes   | the per-shard `security_findings_shard_*` + `quality_findings` + `senior_summary` contracts (from sly_data), `change_profile`                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Produces   | **`review_report`** contract → sly_data; developer-facing report published                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Behavior   | De-duplicates overlapping findings (same file/line/root cause), rank-orders by severity, writes an executive summary, computes the **PR health score (0–100)** by the deterministic deduction rubric fixed in its instructions (critical −25, high −10, medium −4, low −1, floor 0 — see LLD §3, `review_synthesis_agent`; not LLM vibes), and issues a recommendation: ✅ Approve / ⚠️ Approve with changes / ❌ Request changes. This report reaches the developer in seconds — and _the same structured object_ feeds risk scoring (P4's fix, by construction). |
+| Behavior   | Recomputes the deterministic secret+sink floor, merges + de-duplicates overlapping findings (same file/line/root cause), rank-orders by severity, uses `senior_summary` as the executive summary when present, computes the **PR health score (0–100)** by the deterministic deduction rubric (critical −25, high −10, medium −4, low −1, floor 0 — see LLD §3; not LLM vibes), emits honest `coverage`, and issues a recommendation: ✅ Approve / ⚠️ Approve with changes / ❌ Request changes. The frontman invokes it as pipeline step 6 (§5.2), and _the same structured object_ feeds risk scoring (P4's fix, by construction). |
 
 #### 6. 🎯 `test_selection_agent`
 
@@ -376,7 +376,7 @@ Every contract carries `schema_version`, `run_id`, `produced_by`, `produced_at`.
 
 | Contract                     | Key fields                                                                                                                                                                                                     |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DeliveryEvent`              | `event_id`, `source (github/jenkins/gitlab/manual)`, `repo{url,name,default_branch}`, `change{base_sha,head_sha,branch,pr_id?,title,description,author}`, `target_transition{from_env,to_env}`, `requested_by` |
+| `DeliveryEvent`              | `event_id`, `source (github/manual)`, `repo{url,name,default_branch}`, `change{base_sha,head_sha,branch,pr_id?,title,description,author}`, `target_transition{from_env,to_env}`, `requested_by` |
 | `ChangeProfile`              | `files[{path,language,change_type,hunks,functions_changed[]}]`, `new_functions[]`, `classification`, `loc_added/removed`, `blast_radius{direct[],transitive[],count}`, `sensitive_flags[]`                     |
 | `Finding` (security/quality) | `id`, `category`, `severity`, `file`, `line_start/end`, `cwe?`, `title`, `explanation`, `fix_suggestion`, `source (tool/llm)`                                                                                  |
 | `ReviewPlan`                 | `mode (pr/audit)`, `budget_lines`, `shards[{shard,label,files[],hotspot_weight}]`, `metrics{files_scanned,excluded_files,added_lines,hotspot_lines,shard_count,basis}`                                          |
@@ -390,30 +390,30 @@ Every contract carries `schema_version`, `run_id`, `produced_by`, `produced_at`.
 
 ## 11. End-to-End Data Flow
 
-1. Developer opens a PR / pipeline reaches a promotion stage → platform webhook fires → **Gateway** verifies signature (HMAC/token per platform), normalizes to `DeliveryEvent`, creates the `run` row (Postgres), prepares the workspace (shallow clone at `head_sha`), responds `202 Accepted` to the platform.
+1. A GitHub Action (on PR / promotion) or the `/api/v1/simulate` endpoint posts a `DeliveryEvent` → **Gateway** authenticates the caller (bearer token), creates the `run` row (Postgres), prepares the workspace (shallow clone at `head_sha`), and returns the `run_id`.
 2. Gateway invokes Neuro-SAN `streaming_chat` on `sentinel` with the event JSON as the message and `{event, run_id, git_token, repo_workspace}` in `sly_data`; streamed agent progress is relayed live to the dashboard (SSE) and persisted.
 3. **change_analysis_agent** → `change_profile`.
-4. **security_review_agent** + **code_quality_agent** run in parallel → findings.
-5. **review_synthesis_agent** → `review_report`, published to developer (dashboard + PR comment) _in seconds_ — the review deliverable is done here even before tests run.
+4. **review_planner_tool** sizes the review → 1–4 **security_reviewer** agents + **senior_security_agent** + **code_quality_agent** (invoked one at a time, §5.2) → findings.
+5. **report_publisher_tool** (deterministic) merges + scores the findings → `review_report`, published to the developer (dashboard) _in seconds_ — the review deliverable is done here even before tests run.
 6. **test_selection_agent** → `test_plan` (deterministic core + LLM-documented reasoning).
 7. **test_runner_tool** executes the plan with the repo's own runner → `test_results`.
 8. **environment_context_agent** → `env_context` (ran in parallel since step 3).
 9. **risk_scoring_agent** → deterministic score + explanation, cross-referencing all four upstream contracts.
-10. **promotion_gating_agent** → trust-ladder decision + full reasoning trail; persists; **promote** → Gateway executes platform action (merge-gate pass / deployment dispatch / pipeline trigger); **hold/escalate** → notifications + dashboard approval queue.
+10. **promotion_gating_agent** → trust-ladder decision + full reasoning trail; persists; **promote** → the CI check passes (the GitHub Action gate); **hold/escalate** → notifications + dashboard approval queue.
 11. Human approves/rejects escalations in the dashboard; resolution executes or blocks the promotion and is appended to the audit trail.
 12. Every artifact of steps 1–11 is queryable afterward: "why was this promoted?" always has a concrete answer.
 
-## 12. CI/CD Platform Integrations (All Three, Equal Depth)
+## 12. CI/CD Platform Integration (GitHub Actions)
 
-The Gateway implements one **adapter interface** (`inbound: webhook→DeliveryEvent`, `outbound: decision→platform action`, `report: review→PR/MR comment`). **Hackathon scope: the GitHub Actions adapter + simulate mode are implemented live; the Jenkins and GitLab CI columns below are the extension contract, implemented post-hackathon** (same pattern as the language table, §9 — adding a platform touches only one Gateway adapter, zero HOCON changes). Full endpoint/payload detail: LLD §7; pipeline snippets: LLD §7.4.
+The Gateway exposes one HTTP ingest endpoint (`POST /api/v1/simulate`) that accepts a `DeliveryEvent`, clones `repo.url` server-side, runs the network, and returns the run. The **GitHub Action** (`.github/workflows/sentinel-gate.yml`) is the live integration; the same endpoint powers demo/simulate mode. Full endpoint/payload detail: LLD §7. (The single Gateway adapter interface — D6 — leaves room for other CI platforms post-hackathon; none are specified here.)
 
-|                  | GitHub Actions                                                                                                                  | Jenkins                                                                    | GitLab CI                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Inbound trigger  | `pull_request` / `workflow_dispatch` webhooks (HMAC-SHA256 verified)                                                            | Generic Webhook Trigger plugin POST or pipeline `httpRequest` step (token) | Project webhooks: MR events / pipeline events (secret token)          |
-| Blocking usage   | Required status check `sentinel/gate` via Checks API                                                               | `input`/gate stage polling Gateway decision endpoint                       | External status via Commit Status API gating MR                       |
-| Promotion action | `workflow_dispatch` on deploy workflow / Deployments API                                                                        | Trigger parameterized deploy job (`/job/…/buildWithParameters`)            | Trigger pipeline (`POST /projects/:id/trigger/pipeline`) with env var |
-| Review comment   | PR comment via Issues API                                                                                                       | Build description / PR comment via plugin when GitHub-backed               | MR note via Notes API                                                 |
-| Demo mode        | Simulated: Gateway `/api/v1/simulate` endpoint replays recorded webhook payloads — identical code path, no live platform needed |
+|                  | GitHub Actions                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Inbound trigger  | `.github/workflows/sentinel-gate.yml` runs on `pull_request` / `workflow_dispatch`, builds a `DeliveryEvent`, and `POST`s it to `/api/v1/simulate` (bearer token `SENTINEL_TOKEN`) |
+| Blocking usage   | The Action polls the run and **fails the check unless `decision == promote`**                                                              |
+| Promotion action | Check passes → the PR is mergeable (the gate is the Action job itself)                                                                     |
+| Review comment   | Dashboard (posting the review back as a PR comment is post-hackathon)                                                                      |
+| Demo mode        | `/api/v1/simulate` builds a `DeliveryEvent` and clones `repo.url` server-side — identical code path, no live platform needed              |
 
 ### 12.1 Audit mode (full-repo, integration-free)
 
@@ -476,7 +476,7 @@ AuthN/Z: hackathon = static bearer token; production = OIDC (company SSO) with r
 3. ✅ **Demo Run 1 — happy path:** small low-risk change → clean parallel review → small relevant test subset selected & passing → low score → auto-promote (dev→test) with full reasoning trail on the dashboard.
 4. ✅ **Demo Run 2 — the escalation (money shot):** change touching the auth module with planted string-concatenated SQL **and a hardcoded secret** → Security Review flags **two Criticals** → risk 95 (≥75, critical band; §6 worked check) **although every test passes** → gating escalates to human approval, reasoning trail explicitly citing both security findings; approver resolves it live in the dashboard.
 5. ✅ Side-by-side reasoning trails (dashboard) + live agent choreography (NSFlow).
-6. CI/CD platform scope: **GitHub Actions adapter + simulate mode only**; Jenkins and GitLab CI remain specified as the extension contract (§12), implemented post-hackathon.
+6. CI/CD platform scope: **GitHub Actions (via `/api/v1/simulate`) + simulate mode** (§12). The single Gateway adapter interface (D6) leaves room for other platforms post-hackathon; none are specified here.
 7. Stretch: live GitHub webhook (not simulated); seeded `incidents` row visibly shifting a repeat run's score; Slack/Teams notification on the approval step.
 8. Post-M4 enhancement (built): **audit mode** (§12.1) + **adaptive security-review fan-out** (§5.3 #3) — `scripts/run_repo.py --full` runs the whole pipeline over any public repo, `review_planner` sizing 1–4 parallel reviewers by hotspot volume, with honest deep-review coverage reporting.
 

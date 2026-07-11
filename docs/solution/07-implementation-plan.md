@@ -1,5 +1,7 @@
 # 07 — Implementation Plan
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) (spec) · [03-hld.md](03-hld.md) (deployment/quality attributes) · [04-lld.md](04-lld.md) (layout, HOCON, tools, API, DDL) · [06-frontend-design.md](06-frontend-design.md) (SPA).
 **Strategy:** contract-first, component-based build with one early end-to-end tracer bullet, then parallel component tracks integrating at defined milestones. Phases are dependency-ordered, not calendar-bound — scale each to team size and deadline.
 
@@ -10,7 +12,7 @@
 1. **Tracer bullet before fan-out.** Pure "build components → integrate at the end" discovers integration surprises last, when they are most expensive. Phase 0 therefore drives one thin slice through the entire spine (simulate → Gateway → minimal Neuro-SAN network → Postgres → JSON decision out) before any component track starts. Every risky framework assumption dies in week one or gets redesigned cheaply.
 2. **Contracts are the integration interface.** D7 (versioned JSON-schema'd contracts) is what makes parallel component work safe: every track builds against `lib/contracts.py` fixtures, not against each other's code. Contracts freeze at the end of Phase 1; changing one afterwards starts in [01](01-proposed-solution.md) per repo rule.
 3. **Every component is testable without its neighbors.** Coded tools are plain Python classes (`async_invoke(args, sly_data)`) — unit-testable with dict fixtures, no LLM, no server. The Gateway tests against a stubbed Neuro-SAN. The SPA tests against contract-fixture mocks. The network tests against data-driven HOCON fixtures with real tools but scripted events.
-4. **Demo-critical path first.** Everything is prioritized by what Demo Runs 1 & 2 ([01 §18](01-proposed-solution.md)) need. Anything not on that path (K8s, OIDC, live webhooks, Jenkins/GitLab adapters) lands in later phases.
+4. **Demo-critical path first.** Everything is prioritized by what Demo Runs 1 & 2 ([01 §18](01-proposed-solution.md)) need. Anything not on that path (K8s, OIDC, live webhooks) lands in later phases.
 
 ## 2. Component Map & Dependencies
 
@@ -18,7 +20,7 @@
 flowchart TD
     P0["Phase 0<br/>Skeleton + framework spike + tracer bullet"]
     P1["Phase 1<br/>Foundations: contracts, DB, shared lib, config files"]
-    A["Track A<br/>17 coded tools (7 groups)"]
+    A["Track A<br/>19 coded tools (7 groups)"]
     B["Track B<br/>Agent network HOCON (4 slices)"]
     C["Track C<br/>Delivery Gateway"]
     D["Track D<br/>Dashboard SPA"]
@@ -34,7 +36,7 @@ flowchart TD
     P6 --> P7
 ```
 
-After Phase 1, tracks **A/B**, **C**, and **D** are independent and can run in parallel (1 person each, or sequentially A→B→C→D solo). Track B consumes Track A groups as they finish — it does not wait for all 16 tools.
+After Phase 1, tracks **A/B**, **C**, and **D** are independent and can run in parallel (1 person each, or sequentially A→B→C→D solo). Track B consumes Track A groups as they finish — it does not wait for all 19 tools.
 
 ## 3. Phase 0 — Skeleton, Framework Spike, Tracer Bullet
 
@@ -74,7 +76,7 @@ Throwaway `spike.hocon` (frontman + one `SpikeProbeTool` numbered pipeline), dri
 
 | #   | Deliverable                                                                                                                                                                                                                                                                               | Definition of done                                                   |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 1.1 | `lib/contracts.py` — JSON Schemas + validators for all 9 contracts ([04 §4](04-lld.md)); fixture factory producing valid sample instances of each                                                                                                                                         | Round-trip validation tests green; fixtures importable by all tracks |
+| 1.1 | `lib/contracts.py` — JSON Schemas + validators for all 11 contract schemas (16 keys) ([04 §4](04-lld.md)); fixture factory producing valid sample instances of each                                                                                                                                         | Round-trip validation tests green; fixtures importable by all tracks |
 | 1.2 | `db/migrations/` — Alembic baseline with full DDL ([04 §8](04-lld.md))                                                                                                                                                                                                            | Migration applies clean on Postgres                          |
 | 1.3 | `db/dao.py` — thin SQLAlchemy DAO shared by coded tools & Gateway                                                                                                                                                                                                                        | CRUD smoke tests per table                                           |
 | 1.4 | `lib/workspace.py` (clone-path helpers), `lib/redact.py` (log redaction filter)                                                                                                                                                                                                           | Unit tests incl. secret-pattern redaction vectors                    |
@@ -124,7 +126,6 @@ Built against a **stub Neuro-SAN** (canned streaming responses) until M3; the in
 | C2   | `invoker/neuro_san_client.py` — streaming client, AGENT_FRAMEWORK(101)/AI(4) handling, `done` + allow-listed sly_data extraction, 3700 s timeout, stream-break ⇒ `failed`                       | Works against stub; swapped to real server at integration                                                        |
 | C3   | GitHub adapter (verify HMAC, normalize, gate status, PR comment, dispatch) + webhook route                                                                                                      | Signature vectors valid/invalid/replay; recorded-payload normalization                                           |
 | C4   | REST + SSE: runs list/detail, `/events` SSE relay (persisted progress replay), approvals queue + resolve, rerun, audit, `/internal/publish-report`, `/internal/cicd-action`, token auth + roles | TestClient suite incl. approval flow and role gating                                                             |
-| C5   | Jenkins + GitLab adapters (same `CicdAdapter` protocol)                                                                                                                                         | **Moved to Phase 7** (decided 2026-07-07, [01 §12](01-proposed-solution.md)): hackathon scope = GitHub + simulate only |
 
 ## 8. Track D — Dashboard SPA (parallel after M1)
 
@@ -132,7 +133,7 @@ Built against MSW-style mocks generated from contract fixtures; touches the real
 
 | Step | Deliverable                                                                                                                                                             |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| D1   | Vite + React + TS + Tailwind + shadcn scaffold, router (5 routes), auth shim (`token` mode), wire types ([06 §7](06-frontend-design.md))                                |
+| D1   | Vite 7 + React 19 + TS + Tailwind v4 scaffold (no shadcn), router (5 routes), auth shim (`token` mode), wire types ([06 §7](06-frontend-design.md))                                |
 | D2   | Runs list + shared chips/badges (`BandChip`, `DecisionChip`, `SeverityChip`, …)                                                                                         |
 | D3   | Run detail: one card per contract (ReviewReport, TestPlan, TestResults, RiskScore w/ dial + contribution bars + LLM-escalation badge, Decision w/ trail); StageTimeline |
 | D4   | SSE hook (`useRunEvents`) + polling fallback; live→durable switchover                                                                                                   |
@@ -165,7 +166,7 @@ Order: **C↔B** (real invoker against real network — M3 becomes reachable thr
 
 ## 11. Phase 7 — Production Track (post-hackathon, unblocks nothing above)
 
-K8s manifest set ([04 §10.2](04-lld.md)) · `RUNNER_MODE=k8s` ephemeral Jobs + RBAC + NetworkPolicies · OIDC + roles · ExternalSecrets · Phoenix/Langfuse OTEL + Prometheus alerts · live GitHub webhook (stretch: [01 §18](01-proposed-solution.md)) · Jenkins/GitLab adapters at full depth (C5 if slipped) · Slack/Teams live webhook.
+K8s manifest set ([04 §10.2](04-lld.md)) · `RUNNER_MODE=k8s` ephemeral Jobs + RBAC + NetworkPolicies · OIDC + roles · ExternalSecrets · Phoenix/Langfuse OTEL + Prometheus alerts · live GitHub webhook (stretch: [01 §18](01-proposed-solution.md)) · Slack/Teams live webhook.
 
 ## 12. Milestones & Demo-Critical Path
 
@@ -178,7 +179,7 @@ K8s manifest set ([04 §10.2](04-lld.md)) · `RUNNER_MODE=k8s` ephemeral Jobs + 
 | **M4**    | Dashboard renders all screens from mocks                            | D1–D5            |
 | **M5**    | Scripted Demo Runs 1 & 2 green on clean compose-up                  | Phase 6          |
 
-Critical path: **M0 → M1 → A6/A1 → B1 → B2 → B3 → B4 → 6.1 → 6.4**. Gateway (C) and SPA (D) are off-path until 6.1/6.2 — they absorb slack. If time compresses, cut in this order: C5 (Jenkins/GitLab adapters), D5 compare view, 6.5 load smoke — never A6 tests, B4 fixtures, or the demo rehearsal.
+Critical path: **M0 → M1 → A6/A1 → B1 → B2 → B3 → B4 → 6.1 → 6.4**. Gateway (C) and SPA (D) are off-path until 6.1/6.2 — they absorb slack. If time compresses, cut in this order: D5 compare view, 6.5 load smoke — never A6 tests, B4 fixtures, or the demo rehearsal.
 
 ## 13. 3-Day Solo Schedule (hackathon calendar mapping)
 
@@ -189,7 +190,7 @@ One person, 3 days. Milestones M0–M5 unchanged; everything below the cut line 
 | **1 — Spine**                               | AM: scaffold (0.1–0.3, python sample repo first) + framework spike (0.4) + contracts/migrations/config (Phase 1, trimmed: schemas as Python dicts in `lib/contracts.py`, one Alembic revision). PM: **M0 tracer bullet**; then A6 (`risk_calculator` + `trust_ladder`, full table-driven tests) + `git_diff`. **End of day: M0 + M1 + demo arithmetic pinned.**       |
 | **2 — Intelligence**                        | AM: A1 rest (`ast_analyzer`, `dependency_graph`), A2 (`secret_scanner`; `dependency_cve` snapshot-only), A3, `contract_store`, A7 (`report_publisher`, `decision_logger`, `cicd_action` simulate no-op, `notification` dashboard-row only). PM: network slices B1→B2→B3→B4; A4 pytest path first, jest second. **End of day: M3 — both demo fixtures pass headless.** |
 | **3 — Surface + demo**                      | AM: Gateway real invoker (C2 against live network), simulate + runs/approvals/audit API + SSE (C1/C4, token auth only); GitHub adapter (C3) if on schedule. PM: SPA cut to runs list + run detail cards + approvals (D1–D3 + minimal D4); demo scripts + seeded incident; **two clean rehearsals = M5.** Evening buffer: compare view, NSFlow polish, README.         |
-| **Cut line (pre-accepted for 3-day scope)** | Jenkins/GitLab adapters (Phase 7, §14), k6 load smoke, OSV live API (snapshot only), Slack/Teams webhook (dashboard notification row suffices), audit screen beyond a plain table, node sample repo _if_ Day 2 slips (language-agnosticism then shown via the detection-table design, demoed on Python only).                                                         |
+| **Cut line (pre-accepted for 3-day scope)** | k6 load smoke, OSV live API (snapshot only), Slack/Teams webhook (dashboard notification row suffices), audit screen beyond a plain table, node sample repo _if_ Day 2 slips (language-agnosticism then shown via the detection-table design, demoed on Python only).                                                         |
 
 Solo-mode note: tracks A/B/C/D were designed for parallel people; solo they serialize on the critical path (§12) — which is exactly the Day 1→2→3 order above. The parallel-track structure still pays off post-hackathon: each track resumes independently.
 

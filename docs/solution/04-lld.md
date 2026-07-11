@@ -1,5 +1,7 @@
 # Sentinel — Low-Level Design (LLD)
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) · constraints from [HLD](03-hld.md) · flows from [DFD](02-dfd.md).
 **Contents:** project layout & runtime config → agent network HOCON → data contracts → coded tools → LLM config → Gateway (API, adapters, CI snippets) → DB DDL → dashboard → deployment artifacts → testing → error handling.
 
@@ -38,9 +40,7 @@ sentinel/
 │   ├── trust_ladder_policy.yaml            # ladder thresholds (§5.13)
 │   └── repo_config.yaml                    # per-repo: smoke set, sensitive rules, quotas (§5, config files)
 ├── gateway/                                # FastAPI service (§7)
-│   ├── app.py, settings.py
-│   ├── webhooks/{github,jenkins,gitlab}.py
-│   ├── adapters/{base.py,github.py,jenkins.py,gitlab.py}
+│   ├── app.py, settings.py                  # single ingest POST /api/v1/simulate (bearer-token auth); other-platform adapters post-hackathon (not built)
 │   ├── invoker/neuro_san_client.py
 │   ├── workspace/manager.py
 │   ├── runs/{state.py,service.py}
@@ -78,7 +78,7 @@ sentinel/
 | `FALLBACK_MODEL_NAME`                               | neuro-san           | optional second-provider fallback (`${?FALLBACK_MODEL_NAME}`)                   |
 | `DATABASE_URL`                                      | neuro-san + gateway | `postgresql+psycopg://…` — coded-tool DAO & Gateway share it                    |
 | `NEURO_SAN_URL`                                     | gateway             | `http://neuro-san:8080`                                                         |
-| `GW_WEBHOOK_SECRET_GITHUB` / `_GITLAB` / `_JENKINS` | gateway             | signature/token verification                                                    |
+| `SENTINEL_TOKEN`                                    | gateway             | bearer token authenticating callers of `POST /api/v1/simulate`                  |
 | `GW_GIT_TOKEN_<REPO_KEY>`                           | gateway             | per-repo read-only clone tokens                                                 |
 | `GW_AUTH_MODE`                                      | gateway             | `token` (hackathon) / `oidc` (prod)                                             |
 | `WORKSPACE_ROOT`                                    | gateway + neuro-san | shared volume mount, e.g. `/workspaces`                                         |
@@ -345,7 +345,7 @@ All contracts: `{"schema_version": "1", "run_id": string, "produced_by": string,
 ```json
 {
   "event_id": "s(uuid)",
-  "source": "github|jenkins|gitlab|manual",
+  "source": "github|manual",
   "repo": { "url": "s", "name": "s", "default_branch": "s" },
   "change": {
     "base_sha": "s",
@@ -662,40 +662,39 @@ Timeout 3700 s (> network `max_execution_seconds`); stream break ⇒ run `failed
 
 | Method & path                                                      | Auth role                                         | Purpose                                                      |
 | ------------------------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------------ |
-| `POST /webhooks/github` \| `/jenkins` \| `/gitlab` (jenkins/gitlab post-hackathon) | signature/token                                   | F1 intake → 202 `{run_id}`                                   |
-| `POST /api/v1/simulate`                                            | admin                                             | replay recorded webhook payload (demo mode — identical path) |
+| `POST /api/v1/simulate`                                            | admin (bearer `SENTINEL_TOKEN`)                   | **single ingest** — accepts a full `DeliveryEvent`, clones `repo.url` server-side, runs the network → `{run_id}`. Same code path for the GitHub Action and demo mode. |
 | `GET /api/v1/runs?repo=&band=&decision=&state=&page=`              | viewer                                            | runs list                                                    |
 | `GET /api/v1/runs/{run_id}`                                        | viewer                                            | full run detail (all contracts + trail)                      |
 | `GET /api/v1/runs/{run_id}/events` (SSE)                           | viewer                                            | live progress stream                                         |
 | `POST /api/v1/runs/{run_id}/rerun`                                 | approver                                          | idempotent re-run of same event                              |
+| `POST /api/v1/runs/{run_id}/stop`                                  | approver                                          | stop an in-flight run                                        |
 | `GET /api/v1/approvals?status=pending`                             | viewer                                            | approval queue                                               |
 | `POST /api/v1/approvals/{id}` `{action: approve\|reject, comment}` | approver                                          | F16; on approve → outbound promotion                         |
 | `GET /api/v1/audit?run_id=`                                        | viewer                                            | audit trail                                                  |
-| `POST /internal/publish-report` · `POST /internal/cicd-action`     | cluster-internal (network policy + shared secret) | called by coded tools §5.7/§5.15                             |
-| `GET /healthz` · `GET /metrics`                                    | none/scrape                                       | liveness · Prometheus                                        |
+| `GET /api/v1/whoami` · `POST /api/v1/logout`                       | any authenticated                                 | caller identity/role · clear session token                  |
+| `GET /healthz`                                                     | none                                              | liveness                                                    |
+| `POST /internal/publish-report` · `POST /internal/cicd-action` · `GET /metrics` | — | **post-hackathon, not built** (coded-tool callbacks / Prometheus scrape) |
 
 Run state machine (`runs.state`): `received → analyzing → reviewing → testing → scoring → gated → done | failed` — transitions driven by AGENT_FRAMEWORK progress markers; any state may → `failed`.
 
-### 7.3 Platform adapters (`adapters/base.py`)
+### 7.3 Single Gateway ingest + adapter interface
 
-Hackathon scope ([01 §12](01-proposed-solution.md)): `github.py` implemented; `jenkins.py` / `gitlab.py` are post-hackathon drop-ins behind the same protocol.
+Hackathon scope ([01 §12](01-proposed-solution.md)): one HTTP ingest (`POST /api/v1/simulate`) authenticated by bearer token. The optional adapter interface below is the extension point that leaves room for other CI platforms **post-hackathon (not built)** — no per-platform receiver exists today.
 
 ```python
-class CicdAdapter(Protocol):
-    def verify(self, request) -> bool                       # HMAC-SHA256 (GitHub X-Hub-Signature-256) / GitLab X-Gitlab-Token / Jenkins shared token
-    def normalize(self, payload) -> DeliveryEvent           # PR events + promotion (workflow_dispatch / pipeline / build params)
-    def set_gate_status(self, event, state, url) -> None    # Checks API "sentinel/gate" / commit status / build result
-    def post_review_comment(self, event, md) -> None        # PR comment / MR note / build description(+PR comment if GitHub-backed)
-    def dispatch_promotion(self, event, decision) -> None   # workflow_dispatch → deploy.yml / POST job/…/buildWithParameters / POST projects/:id/trigger/pipeline
+class CicdAdapter(Protocol):                                # optional, post-hackathon; GitHub uses the Action below, not this
+    def verify(self, request) -> bool                       # bearer-token check (SENTINEL_TOKEN)
+    def normalize(self, payload) -> DeliveryEvent           # PR events + promotion (workflow_dispatch)
+    def set_gate_status(self, event, state, url) -> None    # Checks API "sentinel/gate"
+    def post_review_comment(self, event, md) -> None        # PR comment (post-hackathon)
+    def dispatch_promotion(self, event, decision) -> None   # workflow_dispatch → deploy.yml
 ```
 
-### 7.4 Pipeline snippets (per platform, condensed; full files in repo)
+### 7.4 GitHub Action gate (the live integration)
 
-**GitHub Actions** (`.github/workflows/sentinel.yml`): on `pull_request`/`workflow_dispatch` → single step `curl -sf -X POST $GW/webhooks/github -H "X-Hub-Signature-256: …" -d @event.json`; branch protection requires check `sentinel/gate`. Promotion = Gateway dispatches `deploy.yml` with `{environment}` input.
-**Jenkins** (post-hackathon; `Jenkinsfile` stage): `stage('Delivery Intelligence') { httpRequest POST $GW/webhooks/jenkins …; waitUntil { gate = httpRequest GET $GW/api/v1/runs/$RUN_ID; gate.decision != null } ; error-if hold/escalate-unapproved }`. Promotion = Gateway `buildWithParameters` on the deploy job.
-**GitLab CI** (post-hackathon; `.gitlab-ci.yml` job `sentinel`): webhook configured project-side (MR events); job polls run status API as above; MR gated by commit status. Promotion = Gateway pipeline-trigger with `TARGET_ENV`.
+**GitHub Actions** (`.github/workflows/sentinel-gate.yml`): on `pull_request`/`workflow_dispatch`, build a `DeliveryEvent` and `POST` it to `/api/v1/simulate` with `Authorization: Bearer $SENTINEL_TOKEN` (no HMAC, no `/webhooks/*` receiver); the job then polls the run and **fails the check unless `decision == promote`**. Needs secrets `SENTINEL_GATEWAY_URL` + `SENTINEL_TOKEN`.
 
-## 8. Database Schema (PostgreSQL 16, Alembic-managed)
+## 8. Database Schema (PostgreSQL 17, Alembic-managed)
 
 ```sql
 CREATE TABLE runs (
@@ -768,16 +767,18 @@ CREATE TABLE notifications (
 | Approvals  | `/approvals`     | `GET/POST /api/v1/approvals`            | pending queue; detail side-panel = risk+decision cards; Approve/Reject + mandatory comment on reject                                                                                                                                                                                                                                                     |
 | Audit      | `/audit?run_id=` | `GET /api/v1/audit`                     | append-only event table                                                                                                                                                                                                                                                                                                                                  |
 
-SSE event shape: `{run_id, ts, kind: stage_started|stage_done|agent_message|state_change, stage?, text?}` (mapped from AGENT_FRAMEWORK stream + state machine).
+SSE emits two event kinds: `state_change` (fields: `seq, state, origin`) mapped from the run state machine, and `agent_message` (fields: `seq, invoked, origin`) mapped from the AGENT_FRAMEWORK stream. There are no `stage_started`/`stage_done` events.
 
 ## 10. Deployment Artifacts
 
-### 10.1 `deploy/docker-compose.yaml` (hackathon)
+> **Status: specified, not yet built — post-hackathon packaging.** No `deploy/` dir, `docker-compose.yaml`, Dockerfiles, or `k8s/` manifests exist today; dev is host-native (local Postgres 17, no Docker). The artifacts below are the target packaging; the move is config-only.
+
+### 10.1 `deploy/docker-compose.yaml` (hackathon — specified, not yet built)
 
 ```yaml
 services:
   postgres:
-    image: postgres:16
+    image: postgres:17
     environment:
       { POSTGRES_DB: dintel, POSTGRES_USER: dintel, POSTGRES_PASSWORD: dintel }
     volumes: [pgdata:/var/lib/postgresql/data]
@@ -814,7 +815,7 @@ services:
 volumes: { pgdata: {}, workspaces: {} }
 ```
 
-### 10.2 `deploy/k8s/` manifest set (production)
+### 10.2 `deploy/k8s/` manifest set (production — specified, not yet built)
 
 | File                            | Object                                                  | Key fields                                                                              |
 | ------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------- |

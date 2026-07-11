@@ -1,5 +1,7 @@
 # 06 — Frontend Design (Decision Dashboard SPA)
 
+**Author:** Harshit Anand
+
 **Derived from:** [01-proposed-solution.md](01-proposed-solution.md) §14 (dashboard scope) · [04-lld.md](04-lld.md) §7.2 (REST API), §8 (schema), §9 (screens/routes/SSE) · [03-hld.md](03-hld.md) §7 (auth roles). This document adds _no new capability_ — it is the frontend detail behind the four screens already specified in LLD §9. If anything here conflicts with 01/04, 01/04 win.
 
 ---
@@ -43,16 +45,18 @@ The Decision Dashboard is a **read-mostly, explainability-first SPA** served as 
 
 | Concern      | Choice                           | Why                                                                                                                                           |
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Framework    | **React 18 + TypeScript**        | Component model maps 1:1 to the LLD §9 card list; TS types are the wire contracts (§7).                                                       |
-| Build        | **Vite**                         | `vite build` → `dist/` copied into Gateway `static/` at image build; dev server proxies API.                                                  |
-| Styling      | **Tailwind CSS**                 | Utility-first; semantic color tokens (§8) encode band/severity/decision meaning.                                                              |
-| Components   | **shadcn/ui** (Radix primitives) | Card, Accordion, Badge/Chip, Dialog, Table, Tabs, Toast — the exact primitives §9 needs, accessible by default. Copied in, not a runtime dep. |
-| Charts       | **Recharts**                     | Risk score dial, PR-health gauge, per-factor contribution bars ([04-lld.md](04-lld.md) §9).                                                   |
-| Routing      | **React Router**                 | 4 routes (§4).                                                                                                                                |
-| Server state | **TanStack Query**               | REST caching, background refetch, polling fallback when SSE drops (§6).                                                                       |
+| Framework    | **React 19 + TypeScript**        | Component model maps 1:1 to the LLD §9 card list; TS types are the wire contracts (§7).                                                       |
+| Build        | **Vite 7**                       | `vite build` → `dist/` copied into Gateway `static/`; dev server proxies API. (Vite 8 rolldown is broken on the dev box → pinned Vite 7 + `@vitejs/plugin-react` 4.) |
+| Styling      | **Tailwind CSS v4**              | Utility-first; semantic color tokens (§8) encode band/severity/decision meaning.                                                              |
+| Components   | **hand-built components (no component library)** | Cards, accordion, chips, table, dials — plain React + Tailwind. No shadcn/ui, Radix, or lucide-react installed. |
+| Charts       | **hand-written SVG**             | Risk score dial + per-factor contribution bars are hand-rolled SVG ([04-lld.md](04-lld.md) §9). No chart library.                             |
+| Routing      | **React Router** (`react-router-dom` 7) | Routes (§4).                                                                                                                          |
+| Server state | **plain fetch hooks**            | Hand-rolled `useRuns` / `useRun` / `useApprovals` / `useAudit` in `src/lib.tsx` (fetch + `useEffect`). No TanStack Query.                     |
 | Live         | **native `EventSource`**         | SSE stream `/runs/{id}/events`; no library.                                                                                                   |
 
-No global state store (Redux/Zustand): server state lives in TanStack Query, live state in a per-run SSE hook, UI state is local. Adding a store is deferred until a screen needs cross-route shared client state — none does today.
+No global state store (Redux/Zustand): server state lives in the plain fetch hooks, live state in a per-run SSE hook, UI state is local. Adding a store is deferred until a screen needs cross-route shared client state — none does today.
+
+Also shipped beyond the card list: a live **AgentGraph** (agent-network graph rendered from the SSE `agent_message` stream) on Run detail, and a **LoginGate** token-entry screen that gates the app until a bearer token is supplied.
 
 ---
 
@@ -95,7 +99,7 @@ flowchart TD
     RD --> DC["DecisionCard (decision + trail)"]
     RR --> FA["FindingsAccordion"]
     FA --> FI["FindingItem (severity chip, fix)"]
-    RS --> DIAL["ScoreDial (Recharts)"]
+    RS --> DIAL["ScoreDial (hand-written SVG)"]
     RS --> BARS["ContributionBars + LLM-escalation badge"]
     DC --> TRAIL["ReasoningTrail (review/testing/results/context/policy)"]
     DC --> ACT["ActionsTaken + ApprovalControls"]
@@ -107,7 +111,7 @@ flowchart TD
 
 ## 6. Data & Live-Update Layer
 
-### 6.1 REST (TanStack Query)
+### 6.1 REST (plain fetch hooks)
 
 | Hook                     | Endpoint                                              | Notes                                            |
 | ------------------------ | ----------------------------------------------------- | ------------------------------------------------ |
@@ -220,7 +224,7 @@ Semantic Tailwind tokens — color = meaning, applied identically across every c
 - Neutral surface: zinc scale; **dark mode** default (demo on projector) with a light toggle.
 - Score dial color = the run's band color; the 75 threshold marked so "critical starts here" is visible.
 - `source: 'llm'` findings and the LLM-escalation badge carry a subtle "AI" marker — the audience must distinguish deterministic points (bars) from LLM-added points (badge) at a glance (F2).
-- Iconography via `lucide-react` (ships with shadcn/ui).
+- Iconography via inline SVG / Unicode glyphs (no icon library installed).
 
 ---
 
@@ -241,7 +245,7 @@ Client gating is UX only — the Gateway enforces roles per endpoint. A 401/403 
 
 ## 10. Accessibility
 
-- shadcn/ui (Radix) gives focus management, keyboard nav, and ARIA for Accordion/Dialog/Tabs/Table out of the box — do not hand-roll these.
+- Components are hand-built, so focus management, keyboard nav, and ARIA roles for the accordion/table/dialog patterns are added explicitly (native `<button>`/`<details>` elements and semantic markup where possible rather than div-soup).
 - SSE live-log is an `aria-live="polite"` region so screen readers announce stage progress.
 - Color is never the sole signal: every chip pairs color with a text label (`Critical`, `Escalate`); dials/bars carry numeric labels.
 - Contrast: band/severity colors chosen for WCAG AA on the zinc surfaces in both themes.
