@@ -20,7 +20,11 @@ def test_secret_scanner_flags_each_secret_type_and_ignores_benign():
     out = SecretScannerTool().invoke({}, _profile("app/config.py", patch))
     findings = out["findings"]
     assert len(findings) == 5, [f["category"] for f in findings]
-    assert all(f["severity"] == "critical" for f in findings)  # secrets always critical
+    # specific rules (aws/private-key/jwt/credential) are critical; the entropy heuristic is only
+    # high — it's a weak signal and was inflating the critical count with false positives.
+    for f in findings:
+        want = "high" if f["category"] == "high_entropy_secret" else "critical"
+        assert f["severity"] == want, f
     cats = {f["category"] for f in findings}
     assert cats == {"aws_access_key", "private_key", "jwt", "hardcoded_credential", "high_entropy_secret"}
     assert all(f["source"] == "tool" and f["file"] == "app/config.py" for f in findings)

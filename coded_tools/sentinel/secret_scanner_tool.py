@@ -48,6 +48,10 @@ _RULES: List[Tuple[str, "re.Pattern", str, str]] = [
      "CWE-798", "Hardcoded credential"),
 ]
 _QUOTED = re.compile(r"['\"]([^'\"]{20,})['\"]")
+# A real high-entropy secret (base64/hex/JWT/token) is compact and structureless: only token chars,
+# no spaces, no ':' (so URLs, log sentences, and prose descriptions — which trip a bare entropy test
+# and caused ~95% of false-positive "criticals" — are rejected before the entropy check).
+_TOKENISH = re.compile(r"^[A-Za-z0-9+/=_.\-]{20,}$")
 
 
 class SecretScannerTool(CodedTool):
@@ -74,8 +78,10 @@ class SecretScannerTool(CodedTool):
             if rx.search(content):
                 return cat, cwe, title
         m = _QUOTED.search(content)
-        if m and triage.entropy(m.group(1)) >= 4.0:
-            return "high_entropy_secret", "CWE-798", "High-entropy secret string"
+        if m:
+            s = m.group(1).strip()
+            if _TOKENISH.match(s) and triage.entropy(s) >= 4.2:  # token-shaped + high entropy
+                return "high_entropy_secret", "CWE-798", "High-entropy secret string"
         return None
 
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
@@ -118,7 +124,10 @@ class SecretScannerTool(CodedTool):
                 if sec:
                     n += 1
                     cat, cwe, title = sec
-                    findings.append(self._finding(f"SEC{tag}-{n:03d}", cat, "critical", path, lineno,
+                    # entropy is a weak heuristic -> high, not critical (avoids inflating the critical
+                    # count); the specific rules (aws key, private key, hardcoded credential) stay critical.
+                    sev = "high" if cat == "high_entropy_secret" else "critical"
+                    findings.append(self._finding(f"SEC{tag}-{n:03d}", cat, sev, path, lineno,
                                                    cwe, title, f"{title} detected in an added line of {path}.",
                                                    "Remove the secret from source and rotate it; load from a secrets manager or env var."))
                     continue  # a secret line isn't also sink-scanned
