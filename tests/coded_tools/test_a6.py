@@ -88,6 +88,43 @@ def test_stage_failure_and_smoke():
     assert r["score"] == 30
 
 
+def test_error_status_counts_as_failure():
+    # An import break yields JUnit <error> cases: totals.failed == 0, errors > 0. Must still score.
+    sly = {
+        "run_id": "r",
+        "test_results": {"totals": {"failed": 0, "passed": 0, "skipped": 0, "errors": 2},
+                         "cases": [{"test_id": "tests.test_pay::test_charge", "status": "error"}]},
+    }
+    r = risk(sly)
+    assert any(c["factor"] == "tests.selected_failure" for c in r["contributions"])
+    assert r["score"] == 25
+
+
+def test_smoke_failure_matches_across_id_formats():
+    # smoke_set holds the config source-path id; junit reports the dotted-module id. Must match.
+    sly = {
+        "run_id": "r",
+        "test_plan": {"smoke_set": ["tests/test_health.py::test_health_ok"]},
+        "test_results": {"totals": {"failed": 1, "passed": 0, "skipped": 0},
+                         "cases": [{"test_id": "tests.test_health::test_health_ok", "status": "failed"}]},
+    }
+    r = risk(sly)
+    assert any(c["factor"] == "tests.smoke_failure" for c in r["contributions"]), r["explanation"]
+    assert r["score"] == 25 + 40  # selected_failure_base + smoke_failure
+
+
+def test_smoke_failure_jest_file_only_entry():
+    # jest smoke entry is file-only; a failing case in that file (id has ::name) must match by suite.
+    sly = {
+        "run_id": "r",
+        "test_plan": {"smoke_set": ["test/health.test.js"]},
+        "test_results": {"totals": {"failed": 1, "passed": 0, "skipped": 0},
+                         "cases": [{"test_id": "test/health.test.js::health responds 200", "status": "failed"}]},
+    }
+    r = risk(sly)
+    assert any(c["factor"] == "tests.smoke_failure" for c in r["contributions"]), r["explanation"]
+
+
 # ---------- trust_ladder: full matrix (01 §7) ----------
 def test_ladder_dev_to_test():
     assert ladder("dev", "test", "low", 10) == "promote"

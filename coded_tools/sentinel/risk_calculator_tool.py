@@ -19,6 +19,22 @@ from lib import contracts
 logger = logging.getLogger("coded_tools.risk_calculator")
 
 
+def _norm_test_id(tid: str) -> str:
+    """Normalize a test id's file/suite part so config smoke ids (source paths, e.g.
+    'tests/test_health.py::test_ok' or 'test/x.test.js') compare equal to the junit/jest ids
+    risk sees ('tests.test_health::test_ok', 'test/x.test.js::name'): strip a known test-file
+    extension, map path separators to dots. A file-only smoke entry matches at suite
+    granularity — over-triggers to the whole file, the safe direction (risk is raise-only)."""
+    head, _sep, tail = tid.partition("::")
+    head = head.split("#")[0].replace("\\", "/")
+    for ext in (".jsx", ".tsx", ".py", ".js", ".ts"):
+        if head.endswith(ext):
+            head = head[: -len(ext)]
+            break
+    head = head.replace("/", ".").strip(".")
+    return f"{head}::{tail}" if tail else head
+
+
 class RiskCalculatorTool(CodedTool):
     def __init__(self, weights_path: str = "config/risk_weights_v1.yaml"):
         self.weights_path = weights_path
@@ -63,14 +79,16 @@ class RiskCalculatorTool(CodedTool):
                 totals = tr.get("totals") or {}
                 failed_ids = [c.get("test_id", "") for c in (tr.get("cases") or [])
                               if c.get("status") in ("failed", "error")]
-                if totals.get("failed", 0) > 0:
+                if failed_ids:  # includes error-status cases (e.g. import break): totals["failed"] is 0 for those
                     suites = {tid.split("::")[0].split("#")[0] for tid in failed_ids} or {"?"}
                     raw = tc["selected_failure_base"] + (len(suites) - 1) * tc["selected_failure_additional_suite"]
                     add("tests.selected_failure", min(raw, tc["selected_failure_cap"]),
                         cap_applied=raw > tc["selected_failure_cap"],
-                        ev=f"{totals['failed']} failed / {len(suites)} suite(s)")
-                    smoke = set(tp.get("smoke_set") or [])
-                    if smoke and any(tid in smoke for tid in failed_ids):
+                        ev=f"{len(failed_ids)} failed / {len(suites)} suite(s)")
+                    smoke_norm = {_norm_test_id(s) for s in (tp.get("smoke_set") or [])}
+                    if smoke_norm and any(_norm_test_id(t) in smoke_norm
+                                          or _norm_test_id(t.split("::")[0]) in smoke_norm
+                                          for t in failed_ids):
                         add("tests.smoke_failure", tc["smoke_failure"], ev="smoke test failed")
                 if tp.get("selection_confidence") == "low":
                     add("tests.low_confidence", tc["low_confidence"], ev="low selection confidence")

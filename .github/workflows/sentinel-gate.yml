@@ -46,6 +46,8 @@ jobs:
           exit 0
 
       - name: Submit run and gate on the decision
+        # Skip fork PRs here too — the previous step's `exit 0` only ends that step, not the job.
+        if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
         env:
           GW: ${{ secrets.SENTINEL_GATEWAY_URL }}
           TOKEN: ${{ secrets.SENTINEL_TOKEN }}

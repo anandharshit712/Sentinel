@@ -18,6 +18,7 @@ import datetime as _dt
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -34,6 +35,8 @@ from sse_starlette.sse import EventSourceResponse
 
 from db import dao
 from gateway import settings
+
+logger = logging.getLogger("gateway")
 from gateway.invoker.neuro_san_client import invoke_network
 from lib import workspace
 from lib.redact import redact
@@ -213,11 +216,18 @@ def _persist_contracts(run_id: str, sly: dict) -> None:
     test_plan/env_context/review_plan live only in sly_data, so the Gateway lands them for the dashboard.
     Best-effort: a missing/partial contract is skipped, never fails the run.
     """
+    try:
+        _do_persist_contracts(run_id, sly)
+    except Exception as e:  # best-effort: a malformed contract must never fail an otherwise-green run
+        logger.warning("run %s: contract persistence skipped: %s", run_id, e)
+
+
+def _do_persist_contracts(run_id: str, sly: dict) -> None:
     rp = sly.get("review_plan") or {}
     if rp.get("shards") is not None:
         dao.save_run_payload("review_plans", run_id, rp)
     rs = sly.get("risk_score") or {}
-    if {"score", "band", "formula_version"} <= rs.keys():
+    if {"score", "band", "formula_version"} <= rs.keys() and isinstance(rs.get("score"), (int, float)):
         dao.save_run_payload("risk_scores", run_id, rs, score=int(rs["score"]),
                              band=rs["band"], formula_version=rs["formula_version"])
     tr = sly.get("test_results") or {}
@@ -361,6 +371,8 @@ def logout(response: Response) -> dict:
 async def simulate(body: SimulateBody, _role: str = Depends(_require("admin"))) -> dict:
     event = body.event
     _validate_event(event)
+    if not body.repo_workspace and not (event.get("repo") or {}).get("url"):
+        raise HTTPException(400, "event missing repo.url (required unless repo_workspace is supplied)")
     if settings.ALLOWED_REPOS and event["repo"]["name"] not in settings.ALLOWED_REPOS:
         raise HTTPException(403, "repo not on the Sentinel allow-list")  # C3a
     existing = dao.find_run_by_event_id(event["event_id"])
