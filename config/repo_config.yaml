@@ -52,3 +52,20 @@ repos:
   audit-smoke:
     <<: *defaults
     review_budget_lines: 5
+
+  # Small budget forces a 3-4 shard fan-out on --full so all security_reviewer_* light up.
+  anandharshit712/Accident_Detection_System:
+    <<: *defaults
+    review_budget_lines: 40
+
+  # OWASP/NodeGoat — intentionally-vulnerable Node.js app, real sink density (SQLi/eval/weak
+  # crypto/XSS). Budget forced low so --full reliably lands 3-4 shards, not 1.
+  OWASP/NodeGoat:
+    <<: *defaults
+    review_budget_lines: 40
+
+  # OWASP Juice Shop — large intentionally-vulnerable TS/JS app. Tiny budget so --full saturates
+  # the 4-shard cap (its sink density is high enough to hit max_review_shards).
+  bkimminich/juice-shop:
+    <<: *defaults
+    review_budget_lines: 40

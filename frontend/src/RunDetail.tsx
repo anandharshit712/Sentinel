@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import type { RunDetail as RD, Finding, RunState } from './types'
 import {
   BandChip, DecisionChip, SeverityChip, StateChip, ScoreDial, HealthGauge, Card,
-  RoleGate, useRun, useApprovals, resolveApproval, rerun, STAGES, stageRank,
+  RoleGate, useRun, useApprovals, resolveApproval, rerun, stopRun, STAGES, stageRank,
 } from './lib'
 import { useRunEvents } from './sse'
 import { AgentGraph } from './AgentGraph'
@@ -22,7 +22,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   if (loading && !data) return <div className="p-6 text-[var(--ink-dim)]">Loading {id}…</div>
   if (error) return <div className="p-6 text-red-400">Error: {error}</div>
   if (!data) return null
-  const { run, review_report, test_plan, test_results, risk_score, decision, error: failReason } = data
+  const { run, review_report, test_plan, test_results, risk_score, review_plan, decision, error: failReason } = data
   const state = (liveState || run.state) as RunState
   const prodGate = run.to_env === 'production'
   const dec = decision?.decision ?? run.decision
@@ -38,13 +38,17 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
         <DecisionChip d={dec} />
         <span className="ml-auto flex gap-2">
           <RoleGate need="approver">
+            {live && (
+              <button onClick={() => stopRun(id).then(refetch).catch(() => {})}
+                className="rounded-sm border border-red-500/40 px-3 py-1 text-xs uppercase tracking-wide text-red-300 hover:border-red-400 hover:bg-red-500/10">Stop</button>
+            )}
             <button onClick={() => rerun(id).then(r => nav(`/runs/${r.run_id}`))}
               className="rounded-sm border border-[var(--line)] px-3 py-1 text-xs uppercase tracking-wide text-[var(--ink-dim)] hover:border-[var(--signal)] hover:text-[var(--signal)]">Rerun</button>
           </RoleGate>
         </span>
       </header>
 
-      <NetworkCard state={state} events={events} decision={dec} />
+      <NetworkCard state={state} events={events} decision={dec} shardCount={review_plan?.shards?.length} />
 
       {state === 'failed' && <FailureCard error={failReason} events={events} />}
       {decision && <DecisionCard d={decision} prodGate={prodGate} runId={id} onResolved={refetch} />}
@@ -79,7 +83,8 @@ function FailureCard({ error, events }: { error?: string | null; events: any[] }
   )
 }
 
-function NetworkCard({ state, events, decision }: { state: RunState; events: any[]; decision: any }) {
+function NetworkCard({ state, events, decision, shardCount }:
+  { state: RunState; events: any[]; decision: any; shardCount?: number }) {
   const cur = stageRank(state)
   return (
     <Card title="Agent Network · Live"
@@ -100,7 +105,7 @@ function NetworkCard({ state, events, decision }: { state: RunState; events: any
         {state === 'failed' && <li className="rounded-sm border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase text-red-300">failed</li>}
       </ol>
 
-      <AgentGraph events={events} state={state} decision={decision} />
+      <AgentGraph events={events} state={state} decision={decision} shardCount={shardCount} />
 
       {events.length > 0 && (
         <details className="mt-3">

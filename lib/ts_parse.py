@@ -7,11 +7,10 @@ base-vs-head delta signal, not a spec-compliant CFG or full ECMAScript coverage.
 """
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
-from tree_sitter import Node, Query, QueryCursor, Tree
-from tree_sitter_language_pack import get_language, get_parser
+from tree_sitter import Node, Parser, Query, QueryCursor, Tree
+from tree_sitter_language_pack import get_language
 
 _EXT_GRAMMAR = {".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
                 ".ts": "typescript", ".tsx": "tsx"}
@@ -42,14 +41,34 @@ def grammar_for_path(path: str) -> Optional[str]:
     return _EXT_GRAMMAR.get(path[dot:].lower()) if dot != -1 else None
 
 
-@lru_cache(maxsize=None)
+# tree-sitter parses in C and can STACK-OVERFLOW → SIGSEGV, taking the whole process down (not a
+# catchable Python exception). Minified/bundled JS is the classic trigger: one enormous line with
+# deeply-nested expressions (jquery.min.js, *-min.js). Skip oversized or long-line files before
+# parsing — they're vendored/generated, never the code under review.
+# ponytail: content guard, not sandboxing. If a NORMAL file ever segfaults, parse in a subprocess.
+_MAX_SRC_BYTES = 500_000
+_MAX_LINE_LEN = 5_000
+
+
+def _unsafe_to_parse(src: str) -> bool:
+    if len(src) > _MAX_SRC_BYTES:
+        return True
+    return any(len(line) > _MAX_LINE_LEN for line in src.splitlines())
+
+
 def _query(grammar: str) -> Query:
+    # NOT cached: a Query reused across many parsed trees accumulates native state and eventually
+    # SEGFAULTs the process (same class of bug as reusing a Parser — see _parse). Build fresh.
     return Query(get_language(grammar), _DEF_QUERY + _FIELD_DEF[grammar])
 
 
 def _parse(grammar: str, src: str) -> Tuple[Tree, bytes]:
+    # Fresh Parser per call, NOT the cached tree_sitter_language_pack.get_parser() singleton:
+    # reusing one Parser across many parses in a long-lived process accumulates native state and
+    # eventually SEGFAULTs (exit 139), killing the whole neuro-san server. A repo with enough JS/TS
+    # files crosses the threshold mid-audit. get_language() stays cached — grammars are immutable.
     data = src.encode("utf-8", errors="replace")
-    return get_parser(grammar).parse(data), data
+    return Parser(get_language(grammar)).parse(data), data
 
 
 def _text(data: bytes, node: Node) -> str:
@@ -72,7 +91,7 @@ def _qualify(node: Node, name: str, class_names: Dict[int, str]) -> str:
 def extract_defs(path: str, src: str) -> List[Dict[str, Any]]:
     """[{"name", "kind" in (function|method|class), "line_start", "line_end"}] for one JS/TS file."""
     grammar = grammar_for_path(path)
-    if not grammar or not src:
+    if not grammar or not src or _unsafe_to_parse(src):
         return []
     tree, data = _parse(grammar, src)
     matches = _matches(grammar, tree)
@@ -120,7 +139,7 @@ def _count_branches(node: Node, data: bytes) -> int:
 def complexity_and_length(path: str, src: str, qualified_name: str) -> Optional[Tuple[int, int]]:
     """(complexity, length) for the named function/method, or None if not found in `src`."""
     grammar = grammar_for_path(path)
-    if not grammar or not src:
+    if not grammar or not src or _unsafe_to_parse(src):
         return None
     tree, data = _parse(grammar, src)
     matches = _matches(grammar, tree)
@@ -145,6 +164,82 @@ def complexity_and_length(path: str, src: str, qualified_name: str) -> Optional[
     return None
 
 
+def file_metrics(path: str, src: str) -> Dict[str, List[int]]:
+    """{qualified_name: [complexity, length]} for EVERY function/method in one parse.
+
+    complexity_and_length re-parses the whole file per function; this parses once and returns all,
+    so callers scanning many functions don't multiply the (leaky) tree-sitter work.
+    """
+    grammar = grammar_for_path(path)
+    if not grammar or not src or _unsafe_to_parse(src):
+        return {}
+    tree, data = _parse(grammar, src)
+    matches = _matches(grammar, tree)
+    class_names: Dict[int, str] = {}
+    for _, caps in matches:
+        if "class" in caps and "name" in caps:
+            class_names[caps["class"][0].id] = _text(data, caps["name"][0])
+    out: Dict[str, List[int]] = {}
+    for _, caps in matches:
+        if "name" not in caps:
+            continue
+        node = caps.get("method", caps.get("func"))
+        if not node:
+            continue
+        node = node[0]
+        name = _qualify(node, _text(data, caps["name"][0]), class_names)
+        length = node.end_point.row - node.start_point.row + 1
+        out[name] = [1 + _count_branches(node, data), length]
+    return out
+
+
+# --- subprocess isolation -------------------------------------------------------------------------
+# tree-sitter's native parse/query state leaks CUMULATIVELY: each call is fine, but enough of them
+# in one long-lived process (the neuro-san server) eventually SEGFAULTs (exit 139), killing every
+# in-flight run. A repo with many JS/TS files crosses the threshold mid-audit. Fresh Parser/Query
+# only slow it. The robust fix: do a tool's whole batch in a SHORT-LIVED child that exits (freeing
+# all native memory) before the leak matters. If the child still dies, the parent degrades to empty
+# results instead of crashing.
+import json as _json  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+import sys as _sys  # noqa: E402
+
+_BATCH = {"defs": lambda p, s: extract_defs(p, s), "metrics": lambda p, s: file_metrics(p, s)}
+
+
+def _run_batch(mode: str, items: List[List[str]]) -> list:
+    fn = _BATCH[mode]
+    return [fn(path, src) for path, src in items]
+
+
+def batch_isolated(mode: str, items: List[List[str]], chunk: int = 1) -> list:
+    """Parse many [path, src] pairs in throwaway subprocess(es). mode: 'defs' | 'metrics'.
+    Returns results aligned to `items`; on ANY failure (incl. a child segfault) that chunk degrades
+    to empties — never propagates a crash to the caller.
+
+    chunk=1 (one file per child) is deliberate: the leak crosses its SEGFAULT threshold well within a
+    single 50-file batch, but a child parsing ONE file always survives. Empty-src items (e.g. the
+    base side of an added file in audit mode) need no child at all.
+    ponytail: chunk=1 spends ~1 process spawn per changed file. Raise it only with a measured safe
+    ceiling — a chunk that crashes loses ALL its files' results, not just the offending one.
+    """
+    empty: Any = [] if mode == "defs" else {}
+    results: list = [empty for _ in items]
+    todo = [(i, it) for i, it in enumerate(items) if it and it[1]]  # skip empty sources
+    for c in range(0, len(todo), chunk):
+        group = todo[c:c + chunk]
+        try:
+            r = _subprocess.run([_sys.executable, "-m", "lib.ts_parse", "--worker"],
+                                input=_json.dumps({"mode": mode, "items": [it for _, it in group]}),
+                                capture_output=True, encoding="utf-8", errors="replace", timeout=180)
+            if r.returncode == 0 and r.stdout.strip():
+                for (idx, _), val in zip(group, _json.loads(r.stdout)):
+                    results[idx] = val
+        except Exception:
+            pass  # this chunk degrades to empties; keep going
+    return results
+
+
 def demo() -> None:
     src = """
 function foo(a) {
@@ -163,8 +258,21 @@ class Bar {
     assert cx == 4, cx  # base 1 + if + && + ||
     assert length == 4, length
     assert extract_defs("bar.ts", src.replace("function", "function"))  # ts grammar path too
+    # segfault guard: minified/oversized input is skipped (returns empty), never fed to tree-sitter
+    assert extract_defs("min.js", "var a=1;" * 2000) == []   # one 16k-char line (minified)
+    assert extract_defs("big.js", "x = 1;\n" * 100_000) == []  # >500KB
+    assert complexity_and_length("min.js", "a," * 4000, "f") is None
+    fm = file_metrics("bar.js", src)
+    assert fm["foo"] == [4, 4], fm  # same as complexity_and_length, one parse for all funcs
+    # subprocess isolation: batch round-trips through a child process, aligned to input order
+    b = batch_isolated("defs", [["bar.js", src], ["min.js", "x;" * 4000]])
+    assert len(b) == 2 and {d["name"] for d in b[0]} == names and b[1] == [], b
     print("ts_parse: OK")
 
 
 if __name__ == "__main__":
-    demo()
+    if "--worker" in _sys.argv:  # subprocess batch worker (see batch_isolated)
+        req = _json.loads(_sys.stdin.read())
+        _sys.stdout.write(_json.dumps(_run_batch(req["mode"], req["items"])))
+    else:
+        demo()

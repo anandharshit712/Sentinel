@@ -26,7 +26,8 @@ logger = logging.getLogger("coded_tools.dependency_graph")
 
 
 def _git(repo: str, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
+    proc = subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                          encoding="utf-8", errors="replace", check=False)  # not locale (cp1252 crashes on non-Latin1)
     return proc.stdout if proc.returncode == 0 else ""
 
 

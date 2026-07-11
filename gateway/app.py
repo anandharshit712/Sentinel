@@ -40,6 +40,15 @@ from lib.redact import redact
 
 app = FastAPI(title="Sentinel Delivery Gateway", version="1")
 
+
+@app.on_event("startup")
+def _reap_orphaned_runs() -> None:
+    """Tasks don't survive a restart, so any non-terminal run in the DB is orphaned. Fail them on
+    boot (re-runnable via Rerun) instead of leaving them stale 'testing'/'received' forever."""
+    for rid in dao.reap_unfinished_runs():
+        dao.record_audit(rid, actor="gateway", action="run_stopped",
+                         payload={"error": "interrupted by gateway restart"})
+
 # ---------------------------------------------------------------- state machine
 _STATE_ORDER = ["received", "analyzing", "reviewing", "testing", "scoring", "gated", "done", "failed"]
 
@@ -243,9 +252,24 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         _persist_contracts(run_id, sly)
         decision = (sly.get("decision") or {}).get("decision") \
             or (dao.get_decision(run_id) or {}).get("decision")
+        # A completed pipeline always ends in a promotion decision. None means the frontman
+        # returned without running the pipeline (e.g. mistral answered in prose, 0 tool calls) —
+        # a silent empty run. Fail it (re-runnable via RERUN) instead of showing a green DONE
+        # with no report/decision. ponytail: no auto-retry; RERUN covers the occasional flake.
+        if not decision:
+            raise RuntimeError("network finished without a promotion decision — the frontman did "
+                               "not run the pipeline (0 agents invoked). Re-run this event.")
         dao.set_run_state(run_id, "done", finished=True)
         bus.publish(run_id, {"kind": "state_change", "state": "done",
                              "decision": decision, "structure": structure})
+    except asyncio.CancelledError:  # operator hit Stop — mark failed (re-runnable), then propagate.
+        # The invoke_network worker thread can't be interrupted, but the run is finalized here so
+        # the UI leaves "running" immediately; the orphaned thread's result is ignored on return.
+        msg = "stopped by operator"
+        dao.set_run_state(run_id, "failed", finished=True)
+        dao.record_audit(run_id, actor="gateway", action="run_stopped", payload={"error": msg})
+        bus.publish(run_id, {"kind": "state_change", "state": "failed", "error": msg})
+        raise
     except Exception as e:  # transport/stream/clone failure -> failed, re-runnable
         msg = redact(str(e))[:500]  # M3: scrub credentials (e.g. tokenized clone url in git stderr)
         dao.set_run_state(run_id, "failed", finished=True)
@@ -286,6 +310,7 @@ def _validate_event(event: dict) -> None:
 
 
 _TASKS: set[asyncio.Task] = set()  # keep strong refs so background runs aren't GC'd
+_RUN_TASKS: dict[str, asyncio.Task] = {}  # run_id -> task, so /stop can cancel a specific run
 
 
 def _start_run(event: dict, ws_override: str | None) -> str:
@@ -301,7 +326,8 @@ def _start_run(event: dict, ws_override: str | None) -> str:
                      payload={"event_id": event["event_id"]})
     task = asyncio.create_task(_run_pipeline(run_id, event, ws_override))  # REAL event -> clone
     _TASKS.add(task)
-    task.add_done_callback(_TASKS.discard)
+    _RUN_TASKS[run_id] = task
+    task.add_done_callback(lambda t: (_TASKS.discard(t), _RUN_TASKS.pop(run_id, None)))
     return run_id
 
 
@@ -416,6 +442,17 @@ async def rerun(run_id: str, _role: str = Depends(_require("approver"))) -> dict
         raise HTTPException(404, "run not found")
     new_id = _start_run(run["event"], None)  # same event, fresh run row
     return {"run_id": new_id, "state": "received", "rerun_of": run_id}
+
+
+@app.post("/api/v1/runs/{run_id}/stop", status_code=202)
+async def stop(run_id: str, _role: str = Depends(_require("approver"))) -> dict:
+    if not dao.get_run(run_id):
+        raise HTTPException(404, "run not found")
+    task = _RUN_TASKS.get(run_id)
+    if task is None or task.done():
+        raise HTTPException(409, "run is not currently running")
+    task.cancel()  # -> CancelledError in _run_pipeline -> state 'failed' (reason: stopped by operator)
+    return {"run_id": run_id, "stopping": True}
 
 
 @app.get("/api/v1/approvals")

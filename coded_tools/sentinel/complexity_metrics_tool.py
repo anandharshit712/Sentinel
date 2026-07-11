@@ -26,7 +26,7 @@ _BRANCH = (ast.If, ast.IfExp, ast.For, ast.AsyncFor, ast.While,
 
 def _show(repo: str, ref: str, path: str) -> str:
     proc = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"],
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, encoding="utf-8", errors="replace", check=False)  # not locale (cp1252 crashes on non-Latin1)
     return proc.stdout if proc.returncode == 0 else ""
 
 
@@ -76,18 +76,13 @@ def _funcs(src: str) -> Dict[str, ast.AST]:
         return {}
 
 
-def _complexity_and_length(language: str, path: str, src: str, name: str) -> Optional[Tuple[int, int]]:
-    if language == "python":
-        node = _funcs(src).get(name)
-        if node is None:
-            return None
-        return _complexity(node), getattr(node, "end_lineno", node.lineno) - node.lineno + 1
-    if language in ("javascript", "typescript"):
-        try:
-            return ts_parse.complexity_and_length(path, src, name)
-        except Exception:
-            return None  # never let a parse error break the pipeline
-    return None
+def _py_metrics(src: str) -> Dict[str, List[int]]:
+    """{qualified_name: [complexity, length]} for every python function/method, one parse."""
+    out: Dict[str, List[int]] = {}
+    for name, node in _funcs(src).items():
+        length = getattr(node, "end_lineno", node.lineno) - node.lineno + 1
+        out[name] = [_complexity(node), length]
+    return out
 
 
 class ComplexityMetricsTool(CodedTool):
@@ -99,26 +94,40 @@ class ComplexityMetricsTool(CodedTool):
             if not repo:
                 return "Error: missing repo_workspace"
 
-            metrics: List[Dict[str, Any]] = []
-            for f in profile.get("files", []):
+            # Per-file metric maps {name: [complexity, length]} at head and base — parse each file
+            # ONCE, then look up every changed function. Python uses stdlib ast in-process (safe);
+            # JS/TS goes through ts_parse.batch_isolated (tree-sitter's native state leaks and would
+            # SEGFAULT the long-lived server on many-file diffs — 04 §5.6).
+            todo = []  # (i, f, lang, head_path, base_path, changed_defs)
+            for i, f in enumerate(profile.get("files", [])):
                 lang = f.get("language")
                 if lang not in ("python", "javascript", "typescript") or f.get("change_type") == "deleted":
                     continue
                 changed = [d for d in f.get("functions_changed", []) if d["kind"] in ("function", "method")]
-                if not changed:
-                    continue
-                old_path = f.get("old_path", f["path"])
-                head_src = _show(repo, head, f["path"]) if head else ""
-                base_src = _show(repo, base, old_path) if base else ""
-                # ponytail: re-parses the file per changed function (was once-per-file for the pure
-                # Python path); fine for the handful of changed functions a diff typically touches,
-                # revisit with a per-file parse cache if large multi-function diffs prove slow.
+                if changed:
+                    todo.append((i, f, lang, f["path"], f.get("old_path", f["path"]), changed))
+
+            head_m: Dict[int, Dict[str, List[int]]] = {}
+            base_m: Dict[int, Dict[str, List[int]]] = {}
+            js = [(i, hp, bp) for i, _f, lang, hp, bp, _c in todo if lang != "python"]
+            if js:
+                hr = ts_parse.batch_isolated("metrics", [[hp, _show(repo, head, hp)] for _, hp, _ in js])
+                br = ts_parse.batch_isolated("metrics", [[bp, _show(repo, base, bp)] for _, _, bp in js])
+                for k, (i, _, _) in enumerate(js):
+                    head_m[i], base_m[i] = hr[k], br[k]
+            for i, _f, lang, hp, bp, _c in todo:
+                if lang == "python":
+                    head_m[i] = _py_metrics(_show(repo, head, hp)) if head else {}
+                    base_m[i] = _py_metrics(_show(repo, base, bp)) if base else {}
+
+            metrics: List[Dict[str, Any]] = []
+            for i, f, _lang, _hp, _bp, changed in todo:
+                hm, bm = head_m.get(i, {}), base_m.get(i, {})
                 for d in changed:
                     name = d["name"]
-                    hc = _complexity_and_length(lang, f["path"], head_src, name)
-                    bc = _complexity_and_length(lang, old_path, base_src, name)
-                    ch, length = hc if hc else (0, 0)
-                    cb = bc[0] if bc else 0
+                    h, b = hm.get(name), bm.get(name)
+                    ch, length = (h[0], h[1]) if h else (0, 0)
+                    cb = b[0] if b else 0
                     metrics.append({"file": f["path"], "name": name, "complexity_head": ch,
                                     "complexity_base": cb, "complexity_delta": ch - cb, "length": length})
 

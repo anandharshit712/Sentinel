@@ -45,6 +45,23 @@ def set_run_state(run_id: str, state: str, finished: bool = False) -> None:
         c.execute(models.runs.update().where(models.runs.c.run_id == run_id).values(**vals))
 
 
+def reap_unfinished_runs() -> list[str]:
+    """Fail every non-terminal run in one statement; returns the reaped run_ids.
+
+    In-flight runs live in an in-memory asyncio task that does NOT survive a Gateway restart, so any
+    row left non-terminal (received/analyzing/…/gated with no finished_at) is orphaned — no task can
+    ever finalize it. Called on startup to reconcile; the runs become re-runnable via Rerun.
+    """
+    now = _dt.datetime.now(_dt.timezone.utc)
+    with get_engine().begin() as c:
+        res = c.execute(models.runs.update()
+                        .where(models.runs.c.finished_at.is_(None),
+                               models.runs.c.state.notin_(("done", "failed")))
+                        .values(state="failed", finished_at=now)
+                        .returning(models.runs.c.run_id))
+        return [row[0] for row in res]
+
+
 def save_run_payload(table: str, run_id: str, payload: dict, **cols: Any) -> None:
     """Upsert a per-run JSONB row (review_reports/test_plans/…), on run_id conflict."""
     t = models.RUN_PAYLOAD_TABLES.get(table)

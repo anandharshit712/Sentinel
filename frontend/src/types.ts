@@ -93,6 +93,7 @@ export interface RunDetail {
   test_results?: TestResults | null
   env_context?: any
   risk_score?: RiskScore | null
+  review_plan?: { shards?: any[]; metrics?: any } | null   // audit fan-out sizing (shards.length = # SEC agents)
   decision?: (DecisionContract & { reasoning_trail?: any }) | null
   error?: string | null          // run_failed reason (present when state === 'failed')
 }

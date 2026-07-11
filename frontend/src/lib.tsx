@@ -105,6 +105,8 @@ export const resolveApproval = (id: number, action: 'approve' | 'reject', commen
   api(`/api/v1/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action, comment }) })
 export const rerun = (id: string) =>
   api<{ run_id: string }>(`/api/v1/runs/${id}/rerun`, { method: 'POST' })
+export const stopRun = (id: string) =>
+  api<{ run_id: string; stopping: boolean }>(`/api/v1/runs/${id}/stop`, { method: 'POST' })
 export const simulate = (event: unknown, repo_workspace?: string) =>
   api<{ run_id: string }>(`/api/v1/simulate`, { method: 'POST', body: JSON.stringify({ event, repo_workspace }) })
 

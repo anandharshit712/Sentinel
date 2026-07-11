@@ -24,8 +24,12 @@ _STATUS = {"A": "added", "M": "modified", "D": "deleted", "R": "renamed", "C": "
 
 
 def _run_git(repo: str, *args: str) -> str:
+    # encoding="utf-8", errors="replace": git diff output is UTF-8, but subprocess text=True decodes
+    # with the platform locale (cp1252 on Windows) and CRASHES on any non-Latin1 byte — emoji, UTF-8
+    # source, binary-ish content. That crash left stdout None → git_diff returned an error → the
+    # whole change profile came back empty (0 added lines → 1 shard → nothing reviewed).
     proc = subprocess.run(["git", "-C", repo, *args],
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, encoding="utf-8", errors="replace", check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)}: {proc.stderr.strip()}")
     return proc.stdout

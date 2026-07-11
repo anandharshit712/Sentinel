@@ -90,7 +90,7 @@ def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout:
     """
     venv = os.path.join(repo, ".sentinel-venv")  # dot-prefixed -> pytest's default norecursedirs skips it
     subprocess.run([sys.executable, "-m", "venv", venv], check=True, capture_output=True,
-                   text=True, timeout=min(timeout, 180))
+                   encoding="utf-8", errors="replace", timeout=min(timeout, 180))
     py = _venv_python(venv)
     deadline = time.perf_counter() + timeout
 
@@ -99,7 +99,7 @@ def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout:
         if remaining <= 0:
             raise subprocess.TimeoutExpired("pip", timeout)
         subprocess.run([py, "-m", "pip", "install", "-q", *a], cwd=cwd, env=env,
-                       check=True, capture_output=True, text=True, timeout=remaining)
+                       check=True, capture_output=True, encoding="utf-8", errors="replace", timeout=remaining)
 
     _pip("--upgrade", "pip", cwd=repo)
     _pip("pytest", cwd=repo)  # ensure a runner even if the repo doesn't declare it
@@ -117,7 +117,7 @@ def _collect_total(py: str, repo: str, env: Dict[str, str], timeout: int) -> int
     try:
         r = subprocess.run([py, "-m", "pytest", "--collect-only", "-q",
                             "-p", "no:cacheprovider"], cwd=repo, env=env,
-                           capture_output=True, text=True, timeout=min(timeout, 120), check=False)
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=min(timeout, 120), check=False)
         m = re.search(r"(\d+)\s+tests?\s+collected", r.stdout)
         if m:
             return int(m.group(1))
@@ -160,15 +160,20 @@ def _npm_install(npm: str, repo: str, env: Dict[str, str], timeout: int) -> None
     host — same class of risk as `_prepare_venv`'s `pip install -e .`, gated the same way behind
     repo_config `install_deps`."""
     subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=repo, env=env,
-                   check=True, capture_output=True, text=True, timeout=timeout)
+                   check=True, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
+                   stdin=subprocess.DEVNULL)
 
 
 def _list_jest_files(npx: str, repo: str, env: Dict[str, str], timeout: int) -> List[str]:
     """Total test FILES jest would run — the denominator for selection (JS selection is
     file-granularity, unlike pytest's per-test-id granularity; see test_mapper_tool)."""
     try:
-        r = subprocess.run([npx, "jest", "--listTests"], cwd=repo, env=env,
-                           capture_output=True, text=True, timeout=min(timeout, 120), check=False)
+        # --no-install + closed stdin: never let npx prompt to download jest (would block on
+        # stdin forever, orphaning a node child that deadlocks subprocess.run's post-kill pipe
+        # read on Windows). If jest isn't installed, npx exits non-zero → we return [] fast.
+        r = subprocess.run([npx, "--no-install", "jest", "--listTests"], cwd=repo, env=env,
+                           capture_output=True, encoding="utf-8", errors="replace", timeout=min(timeout, 120), check=False,
+                           stdin=subprocess.DEVNULL)
         return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     except Exception:
         return []
@@ -256,7 +261,7 @@ class TestRunnerTool(CodedTool):
         start = time.perf_counter()
         try:
             subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
-                           text=True, timeout=timeout, check=False)
+                           encoding="utf-8", errors="replace", timeout=timeout, check=False)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -312,11 +317,11 @@ class TestRunnerTool(CodedTool):
         # patterns natively (stable across Jest majors, no version-flag split needed), and a
         # `|`-joined single arg breaks on Windows — npx's .CMD shim runs through cmd.exe, and
         # Python's list2cmdline doesn't escape `|` for that inner shell, so it truncates there.
-        cmd = [npx, "jest", "--json", f"--outputFile={json_path}", *ids]
+        cmd = [npx, "--no-install", "jest", "--json", f"--outputFile={json_path}", *ids]
         start = time.perf_counter()
         try:
             subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
-                           text=True, timeout=timeout, check=False)
+                           encoding="utf-8", errors="replace", timeout=timeout, check=False, stdin=subprocess.DEVNULL)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True

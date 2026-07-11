@@ -22,7 +22,7 @@ logger = logging.getLogger("coded_tools.ast_analyzer")
 
 def _show(repo: str, ref: str, path: str) -> str:
     proc = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"],
-                          capture_output=True, text=True, check=False)
+                          capture_output=True, encoding="utf-8", errors="replace", check=False)  # not locale (cp1252 crashes on non-Latin1)
     return proc.stdout if proc.returncode == 0 else ""  # absent at ref (e.g. added file)
 
 
@@ -62,17 +62,6 @@ def _parse_python(src: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _parse(language: str, path: str, src: str) -> Dict[str, Dict[str, Any]]:
-    if language == "python":
-        return _parse_python(src)
-    if language in ("javascript", "typescript"):
-        try:
-            return {d["name"]: d for d in ts_parse.extract_defs(path, src)}
-        except Exception:
-            return {}  # never let a parse error break the pipeline
-    return {}
-
-
 def _changed_ranges(hunks: List[Dict[str, Any]]) -> List[tuple]:
     out = []
     for h in hunks:
@@ -98,15 +87,35 @@ class AstAnalyzerTool(CodedTool):
             if not (repo and base and head):
                 return "Error: missing repo_workspace/base_sha/head_sha"
 
-            new_functions: List[str] = []
-            total = 0
-            for f in profile["files"]:
+            # head/base defs per analyzable file. Python parses in-process (stdlib ast, safe); JS/TS
+            # goes through ts_parse.batch_isolated — tree-sitter's native state leaks cumulatively and
+            # would SEGFAULT the long-lived neuro-san server on a repo with many JS files (04 §5.2).
+            head_defs_by_i: Dict[int, Dict[str, Any]] = {}
+            base_defs_by_i: Dict[int, Dict[str, Any]] = {}
+            js = []  # (i, head_path, base_path)
+            for i, f in enumerate(profile["files"]):
                 lang = f.get("language")
                 if lang not in ("python", "javascript", "typescript") or f.get("change_type") == "deleted":
                     continue
-                head_defs = _parse(lang, f["path"], _show(repo, head, f["path"]))
-                base_defs = _parse(lang, f.get("old_path", f["path"]),
-                                   _show(repo, base, f.get("old_path", f["path"])))  # follow renames
+                hp, bp = f["path"], f.get("old_path", f["path"])  # base path follows renames
+                if lang == "python":
+                    head_defs_by_i[i] = _parse_python(_show(repo, head, hp))
+                    base_defs_by_i[i] = _parse_python(_show(repo, base, bp))
+                else:
+                    js.append((i, hp, bp))
+            if js:
+                head_res = ts_parse.batch_isolated("defs", [[hp, _show(repo, head, hp)] for _, hp, _ in js])
+                base_res = ts_parse.batch_isolated("defs", [[bp, _show(repo, base, bp)] for _, _, bp in js])
+                for k, (i, _, _) in enumerate(js):
+                    head_defs_by_i[i] = {d["name"]: d for d in head_res[k]}
+                    base_defs_by_i[i] = {d["name"]: d for d in base_res[k]}
+
+            new_functions: List[str] = []
+            total = 0
+            for i, f in enumerate(profile["files"]):
+                if i not in head_defs_by_i:
+                    continue
+                head_defs, base_defs = head_defs_by_i[i], base_defs_by_i[i]
                 ranges = _changed_ranges(f.get("hunks", []))
                 # a fully-added file has no base and (with -U0) may have no hunks: treat all defs as changed
                 treat_all = not base_defs or f.get("change_type") == "added"
