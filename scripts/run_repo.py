@@ -29,8 +29,8 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # git empty-tree; audit
 
 def _last_two_shas(url: str) -> tuple[str, str]:
     ws = tempfile.mkdtemp(prefix="sentinel-shas-")
-    subprocess.run(["git", "clone", "--quiet", "--depth", "2", url, ws], check=True,
-                   capture_output=True, text=True)
+    subprocess.run(["git", "-c", "core.longpaths=true", "clone", "--quiet", "--depth", "2", url, ws],
+                   check=True, capture_output=True, text=True)
     log = subprocess.run(["git", "-C", ws, "log", "-2", "--format=%H"],
                          capture_output=True, text=True, check=True).stdout.split()
     if len(log) < 2:
@@ -41,8 +41,10 @@ def _last_two_shas(url: str) -> tuple[str, str]:
 
 def _head_sha(url: str) -> str:
     ws = tempfile.mkdtemp(prefix="sentinel-head-")
-    subprocess.run(["git", "clone", "--quiet", "--depth", "1", url, ws], check=True,
-                   capture_output=True, text=True)
+    # core.longpaths: large repos (e.g. juice-shop) have paths past Windows MAX_PATH (260) -> git
+    # exit 128. Mirrors the Gateway's clone. Only the SHA is read here; the Gateway re-clones.
+    subprocess.run(["git", "-c", "core.longpaths=true", "clone", "--quiet", "--depth", "1", url, ws],
+                   check=True, capture_output=True, text=True)
     return subprocess.run(["git", "-C", ws, "rev-parse", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
 
