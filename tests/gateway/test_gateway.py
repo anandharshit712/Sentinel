@@ -139,6 +139,25 @@ def test_reject_approval_needs_comment(client):
     assert r.status_code == 400
 
 
+def test_persist_contracts_saves_review_plan(monkeypatch):
+    """B5: the Gateway lands review_plan (from allow-listed sly_data) in its own table."""
+    saved = {}
+    monkeypatch.setattr(dao, "save_run_payload",
+                        lambda table, run_id, payload, **cols: saved.setdefault(table, payload))
+    sly = {"review_plan": {"mode": "audit", "shards": [{"shard": 1, "files": ["a.py"]}],
+                           "metrics": {"shard_count": 1}}}
+    gw._persist_contracts("run-xyz", sly)
+    assert "review_plans" in saved and saved["review_plans"]["metrics"]["shard_count"] == 1
+
+
+def test_persist_contracts_skips_absent_review_plan(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(dao, "save_run_payload",
+                        lambda table, run_id, payload, **cols: saved.setdefault(table, payload))
+    gw._persist_contracts("run-xyz", {})  # no review_plan
+    assert "review_plans" not in saved
+
+
 def test_auth_fail_closed(monkeypatch):
     """C4: with tokens configured and no open-mode opt-in, privileged routes need a valid token."""
     monkeypatch.setattr(gw.settings, "OPEN_MODE", False)

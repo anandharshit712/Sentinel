@@ -201,9 +201,12 @@ def _persist_contracts(run_id: str, sly: dict) -> None:
     """Durably store the run's contract payloads from the returned (allow-listed) sly_data.
 
     review_report + decision are already persisted by their coded tools; risk_score/test_results/
-    test_plan/env_context live only in sly_data, so the Gateway lands them for the dashboard.
+    test_plan/env_context/review_plan live only in sly_data, so the Gateway lands them for the dashboard.
     Best-effort: a missing/partial contract is skipped, never fails the run.
     """
+    rp = sly.get("review_plan") or {}
+    if rp.get("shards") is not None:
+        dao.save_run_payload("review_plans", run_id, rp)
     rs = sly.get("risk_score") or {}
     if {"score", "band", "formula_version"} <= rs.keys():
         dao.save_run_payload("risk_scores", run_id, rs, score=int(rs["score"]),
@@ -363,6 +366,7 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
     return {
         "run": run,
         "review_report": (dao.get_payload("review_reports", run_id) or {}).get("payload"),
+        "review_plan": (dao.get_payload("review_plans", run_id) or {}).get("payload"),
         "test_plan": (dao.get_payload("test_plans", run_id) or {}).get("payload"),
         "test_results": (dao.get_payload("test_results", run_id) or {}).get("payload"),
         "env_context": (dao.get_payload("env_contexts", run_id) or {}).get("payload"),

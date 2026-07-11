@@ -2,8 +2,9 @@
 
 Drives the `sentinel` network over HTTP exactly like scripts/verify_b*.py: seed sly_data
 (event, run_id, repo_workspace), stream, surface AGENT_FRAMEWORK(101) progress to a callback,
-and return the terminal AI(4) structure + allow-listed sly_data ({run_id, review_report,
-test_results, risk_score, decision}).
+and return the terminal AI(4) structure + allow-listed sly_data (per the frontman's
+allow.to_upstream list: run_id, change_profile, review_plan, review_report, test_plan,
+test_results, env_context, risk_score, decision).
 
 This is a BLOCKING call (the studio client is a sync generator). The Gateway runs it in a
 thread (asyncio.to_thread) and marshals on_progress back to the event loop.

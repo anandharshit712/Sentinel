@@ -174,9 +174,49 @@ _REVIEW_REPORT = _contract(
             "type": "object",
             "properties": {"critical": _I, "high": _I, "medium": _I, "low": _I},
         },
+        # Present only in audit / fan-out runs (a review_plan existed). Honest reporting of what the
+        # LLM deep-reviewed vs what the deterministic rules scanned, so audit output never over-claims.
+        "coverage": {
+            "type": "object",
+            "properties": {
+                "total_added_lines": _I,
+                "llm_reviewed_lines": _I,
+                "deterministic_coverage_pct": {"type": "integer", "minimum": 0, "maximum": 100},
+                "shards": _I,
+                "unscanned_shards": {"type": "array", "items": _I},
+            },
+        },
     },
     ["executive_summary", "findings", "pr_health_score", "recommendation"],
 )
+
+# ---- 4.10 review_plan (written by review_planner coded tool, not contract_store) ----
+_REVIEW_PLAN = _contract(
+    {
+        "mode": {"enum": ["pr", "audit"]},
+        "budget_lines": _I,
+        "shards": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"shard": _I, "label": _S, "files": _ARR_S, "hotspot_weight": _N},
+                "required": ["shard", "files"],
+            },
+        },
+        "metrics": {
+            "type": "object",
+            "properties": {
+                "files_scanned": _I, "excluded_files": _I, "added_lines": _I,
+                "hotspot_lines": _I, "shard_count": _I, "basis": _S,
+            },
+            "required": ["shard_count"],
+        },
+    },
+    ["mode", "shards", "metrics"],
+)
+
+# ---- senior_summary (executive narrative from senior_security_agent) ----
+_SENIOR_SUMMARY = _contract({"summary": _S}, ["summary"])
 
 # ---- 4.5 test_plan ----
 _TEST_PLAN = _contract(
@@ -326,8 +366,15 @@ _DECISION = _contract(
 CONTRACTS: dict[str, dict] = {
     "event": _EVENT,
     "change_profile": _CHANGE_PROFILE,
-    "security_findings": _FINDINGS,   # 4.3 — same schema, two sly_data keys
+    "security_findings": _FINDINGS,   # 4.3 — same schema, several sly_data keys
     "quality_findings": _FINDINGS,
+    # adaptive security fan-out: one findings contract per shard reviewer (all _FINDINGS aliases)
+    "security_findings_shard_1": _FINDINGS,
+    "security_findings_shard_2": _FINDINGS,
+    "security_findings_shard_3": _FINDINGS,
+    "security_findings_shard_4": _FINDINGS,
+    "review_plan": _REVIEW_PLAN,
+    "senior_summary": _SENIOR_SUMMARY,
     "review_report": _REVIEW_REPORT,
     "test_plan": _TEST_PLAN,
     "test_results": _TEST_RESULTS,
@@ -413,12 +460,22 @@ _SAMPLE_PAYLOADS: dict[str, dict] = {
                       "title": "High cyclomatic complexity", "explanation": "…", "fix_suggestion": "split", "source": "llm"}],
         "quality_score": 82,
     },
+    "review_plan": {
+        "mode": "audit",
+        "budget_lines": 800,
+        "shards": [{"shard": 1, "label": "app", "files": ["app/auth/login.py"], "hotspot_weight": 6.0}],
+        "metrics": {"files_scanned": 12, "excluded_files": 3, "added_lines": 640,
+                    "hotspot_lines": 41, "shard_count": 1, "basis": "hotspot lines / budget"},
+    },
+    "senior_summary": {"summary": "One critical SQL injection in auth; overall posture poor."},
     "review_report": {
         "executive_summary": "1 critical, 1 low.",
         "findings": [{"id": "SEC-001", "severity": "critical", "title": "SQL injection", "source": "tool"}],
         "pr_health_score": 55,
         "recommendation": "request_changes",
         "counts": {"critical": 1, "high": 0, "medium": 0, "low": 1},
+        "coverage": {"total_added_lines": 640, "llm_reviewed_lines": 41,
+                     "deterministic_coverage_pct": 100, "shards": 1, "unscanned_shards": []},
     },
     "test_plan": {
         "selected": [{"test_id": "tests/test_auth.py::test_login", "reason": "covers changed login()", "mapping_source": "import_graph"},
@@ -463,6 +520,11 @@ _SAMPLE_PAYLOADS: dict[str, dict] = {
         "approval_status": "pending",
     },
 }
+
+
+# shard-findings aliases reuse the security_findings fixture (same schema)
+for _i in range(1, 5):
+    _SAMPLE_PAYLOADS[f"security_findings_shard_{_i}"] = dict(_SAMPLE_PAYLOADS["security_findings"])
 
 
 def sample(name: str, run_id: str = "00000000-0000-0000-0000-000000000000") -> dict:

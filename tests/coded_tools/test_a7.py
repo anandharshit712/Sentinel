@@ -74,6 +74,66 @@ def test_report_publisher_synthesizes_from_sly_data(monkeypatch):
     assert contracts.is_valid("review_report", rr)
 
 
+def test_contract_store_accepts_shard_and_senior_names():
+    for name in ["security_findings_shard_1", "security_findings_shard_4"]:
+        sly = {"run_id": "r"}
+        out = ContractStoreTool().invoke({"contract_name": name, "payload": {"findings": []}}, sly)
+        assert out == {"stored": name} and contracts.is_valid(name, sly[name])
+    sly = {"run_id": "r"}
+    out = ContractStoreTool().invoke({"contract_name": "senior_summary", "payload": {"summary": "clean"}}, sly)
+    assert out == {"stored": "senior_summary"}
+
+
+def test_contract_store_still_rejects_tool_owned_review_plan():
+    out = ContractStoreTool().invoke({"contract_name": "review_plan", "payload": {}}, {"run_id": "r"})
+    assert out.startswith("Error:")  # review_plan is written by review_planner, not agents
+
+
+def test_report_publisher_merges_shard_findings_and_dedups(monkeypatch):
+    monkeypatch.setattr(dao, "save_run_payload", lambda *a, **k: None)
+    sly = {"run_id": "rs",
+           "security_findings_shard_1": {"findings": [
+               {"id": "SEC1-001", "severity": "critical", "file": "a.py", "line_start": 1,
+                "category": "sql_injection", "title": "SQLi", "source": "tool"}]},
+           "security_findings_shard_2": {"findings": [
+               {"id": "SEC1-001d", "severity": "critical", "file": "a.py", "line_start": 1,
+                "category": "sql_injection", "title": "SQLi dup", "source": "llm"},  # cross-shard dup
+               {"id": "SEC2-002", "severity": "high", "file": "b.py", "line_start": 5,
+                "category": "xss", "title": "XSS", "source": "llm"}]}}
+    out = ReportPublisherTool().invoke({}, sly)
+    rr = sly["review_report"]
+    assert rr["counts"] == {"critical": 1, "high": 1, "medium": 0, "low": 0}  # a.py dup merged
+    assert out["published"] is True and contracts.is_valid("review_report", rr)
+
+
+def test_report_publisher_adds_coverage_and_uses_senior_summary(monkeypatch):
+    monkeypatch.setattr(dao, "save_run_payload", lambda *a, **k: None)
+    sly = {"run_id": "rc",
+           "review_plan": {"shards": [{"shard": 1, "files": ["a.py"]}, {"shard": 2, "files": ["b.py"]}],
+                           "metrics": {"shard_count": 2, "added_lines": 120}},
+           "review_coverage": {"1": {"snippet_lines": 10, "shard": 1}},  # shard 2 never ran
+           "senior_summary": {"summary": "One critical in auth."},
+           "security_findings_shard_1": {"findings": [
+               {"id": "S1", "severity": "critical", "file": "a.py", "line_start": 1,
+                "category": "sqli", "title": "SQLi", "source": "tool"}]}}
+    ReportPublisherTool().invoke({}, sly)
+    rr = sly["review_report"]
+    assert rr["executive_summary"].startswith("One critical in auth.")  # senior narrative used
+    assert "Coverage:" in rr["executive_summary"]
+    cov = rr["coverage"]
+    assert cov["total_added_lines"] == 120 and cov["llm_reviewed_lines"] == 10
+    assert cov["shards"] == 2 and cov["unscanned_shards"] == [2]  # reviewer 2 didn't run
+    assert contracts.is_valid("review_report", rr)
+
+
+def test_report_publisher_without_plan_has_no_coverage(monkeypatch):
+    monkeypatch.setattr(dao, "save_run_payload", lambda *a, **k: None)
+    sly = {"run_id": "rn", "security_findings": {"findings": []}, "quality_findings": {"findings": []}}
+    ReportPublisherTool().invoke({}, sly)
+    rr = sly["review_report"]
+    assert "coverage" not in rr and contracts.is_valid("review_report", rr)
+
+
 def test_decision_logger_validates_and_persists(monkeypatch):
     calls = {}
     monkeypatch.setattr(dao, "insert_decision", lambda run_id, d: calls.update(run_id=run_id, d=d))

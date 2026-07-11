@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph SYSTEM["System containers"]
         GW["Delivery Gateway<br/>FastAPI · :8000<br/>webhooks, adapters, invoker,<br/>REST+SSE, dashboard static"]
-        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: sentinel<br/>17 coded tools (AGENT_TOOL_PATH)"]
+        NS["Neuro-SAN Server<br/>neuro-san 0.6.70 · :8080 HTTP / :30011 gRPC<br/>network: sentinel<br/>19 coded tools (AGENT_TOOL_PATH)"]
         RUN["Test Runner Sandbox<br/>subprocess (demo) /<br/>ephemeral K8s Job (prod)"]
         NF["NSFlow · :4173<br/>agent visualization"]
         PG[("PostgreSQL 16 · :5432<br/>runs · findings · scores ·<br/>decisions · approvals · audit")]
@@ -102,9 +102,11 @@ flowchart TD
 
         subgraph STAGE_A["Stage 2–4: understand & review"]
             CA["change_analysis_agent"]
-            SR["security_review_agent"]
+            RP["review_planner<br/><b>CodedTool (no LLM)</b><br/>sizes review → 1–4 shards"]
+            SR["security_reviewer_1..4<br/>1–4 adaptive fan-out<br/>(invoked sequentially)"]
+            SS["senior_security_agent"]
             QR["code_quality_agent<br/><i>LIGHT_MODEL slot</i>"]
-            RS["review_synthesis_agent"]
+            RSY["report_publisher<br/><b>CodedTool (no LLM)</b><br/>review synthesis"]
         end
         subgraph STAGE_B["Stage 5–6: test"]
             TS["test_selection_agent"]
@@ -117,20 +119,23 @@ flowchart TD
         end
 
         T_CA["git_diff · ast_analyzer ·<br/>dependency_graph"]
-        T_SR["secret_scanner ·<br/>dependency_cve"]
+        T_SEC["secret_scanner<br/>(per shard n)"]
+        T_CVE["dependency_cve<br/>(reviewer 1 only)"]
+        T_RD["review_digest<br/>→ senior_summary"]
         T_QR["complexity_metrics"]
-        T_RS["report_publisher"]
         T_TS["test_mapper"]
         T_EC["incident_history ·<br/>deploy_window"]
         T_RK["risk_calculator<br/>(risk-v1 weights)"]
         T_PG["trust_ladder (prod floor) ·<br/>decision_logger · cicd_action ·<br/>notification"]
-        T_CS["contract_store<br/>(validates + writes LLM-produced<br/>contracts to sly_data)"]
+        T_CS["contract_store<br/>(validates + writes contracts to<br/>sly_data; security_findings_shard_n)"]
 
-        FM --> CA & SR & QR & RS & TS & TE & EC & RK & PGA
+        FM --> CA & RP & SR & SS & QR & RSY & TS & TE & EC & RK & PGA
+        RP -.->|"selects 1–4 shards"| SR
         CA --- T_CA
-        SR --- T_SR
+        SR --- T_SEC
+        SR --- T_CVE
+        SS --- T_RD
         QR --- T_QR
-        RS --- T_RS
         TS --- T_TS
         EC --- T_EC
         RK --- T_RK
@@ -138,12 +143,12 @@ flowchart TD
         SR & QR & TS & EC --- T_CS
     end
 
-    T_RS & T_RK & T_PG & T_EC -.->|"DAO"| PG[("PostgreSQL")]
-    T_SR -.-> OSV["OSV.dev"]
+    RSY & T_RK & T_PG & T_EC -.->|"DAO"| PG[("PostgreSQL")]
+    T_CVE -.-> OSV["OSV.dev"]
     T_PG -.-> SLKX["Slack/Teams · Gateway internal API"]
 ```
 
-Invariants visible: exactly one frontman; specialists own only their leaf tools (no agent-to-agent shortcuts); every deterministic decision element (`risk_calculator`, `trust_ladder`, `test_runner`) is a tool, not an LLM; sly_data egress is a five-key allow-list.
+Invariants visible: exactly one frontman; specialists own only their leaf tools (no agent-to-agent shortcuts); the security review is an adaptive 1–4-shard fan-out sized by a deterministic planner, not a fixed specialist count; every deterministic element (`review_planner` sharding, `report_publisher` synthesis, `risk_calculator`, `trust_ladder`, `test_runner`) is a tool, not an LLM; sly_data egress is a five-key allow-list.
 
 ## V4 — Cross-Stage Signal Flow (the differentiator)
 

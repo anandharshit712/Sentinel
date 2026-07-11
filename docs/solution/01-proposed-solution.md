@@ -80,7 +80,7 @@ flowchart LR
 
 ## 5. The Agent Network — `sentinel`
 
-Neuro-SAN loads the network from `registries/sentinel.hocon` (registered in `registries/manifest.hocon`). One frontman, eight specialist LLM agents, and seventeen deterministic coded tools.
+Neuro-SAN loads the network from `registries/sentinel.hocon` (registered in `registries/manifest.hocon`). One frontman; specialist LLM agents — change analysis, an **adaptive security-review fan-out** (a deterministic `review_planner` sizes the review and invokes **1–4** parallel `security_reviewer_*` agents, followed by a `senior_security_agent` summarizer), code quality, test selection, environment context, risk scoring, promotion gating; and nineteen deterministic coded tools. (Review synthesis is not an LLM agent — the deterministic `report_publisher` tool merges and scores findings; see §5.3.)
 
 ### 5.1 Network topology
 
@@ -91,9 +91,12 @@ flowchart TD
     FM["🎙️ delivery_coordinator<br/>(Frontman — LLM)"]
 
     FM --> CA["🧩 change_analysis_agent"]
-    FM --> SR["🔒 security_review_agent"]
+    FM --> RP["🗺️ review_planner_tool<br/>(CodedTool — sizes the review)"]
+    FM --> SR1["🔒 security_reviewer_1"]
+    FM -.->|"1–4 (adaptive)"| SRN["🔒 security_reviewer_2..4"]
+    FM --> SS["🕵️ senior_security_agent"]
     FM --> QR["✅ code_quality_agent"]
-    FM --> RS["📋 review_synthesis_agent"]
+    FM --> RPUB["📋 report_publisher_tool<br/>(CodedTool — merge + score)"]
     FM --> TS["🎯 test_selection_agent"]
     FM --> TE["⚙️ test_runner_tool<br/>(CodedTool — no LLM)"]
     FM --> EC["📜 environment_context_agent"]
@@ -104,19 +107,22 @@ flowchart TD
     CA --> T2["ast_analyzer_tool"]
     CA --> T3["dependency_graph_tool"]
 
-    SR --> T4["secret_scanner_tool"]
-    SR --> T5["dependency_cve_tool"]
+    SR1 --> T4["secret_scanner_tool"]
+    SR1 --> T5["dependency_cve_tool"]
+    SRN --> T4
+
+    SS --> T17["review_digest_tool"]
 
     QR --> T6["complexity_metrics_tool"]
-
-    RS --> T7["report_publisher_tool"]
 
     TS --> T8["test_mapper_tool"]
 
     EC --> T9["incident_history_tool"]
     EC --> T10["deploy_window_tool"]
 
-    SR --> T16["contract_store_tool"]
+    SR1 --> T16["contract_store_tool"]
+    SRN --> T16
+    SS --> T16
     QR --> T16
     TS --> T16
     EC --> T16
@@ -129,22 +135,26 @@ flowchart TD
     PG --> T15["notification_tool"]
 
     CA -.->|"change_profile (sly_data)"| TS
-    SR -.->|"findings (sly_data)"| RS
-    QR -.->|"findings (sly_data)"| RS
-    RS -.->|"review_report (sly_data)"| RK
+    RP -.->|"review_plan (sly_data)"| SR1
+    SR1 -.->|"security_findings_shard_n (sly_data)"| RPUB
+    SRN -.->|"security_findings_shard_n (sly_data)"| SS
+    SS -.->|"senior_summary (sly_data)"| RPUB
+    QR -.->|"quality_findings (sly_data)"| RPUB
+    RPUB -.->|"review_report (sly_data)"| RK
     TE -.->|"test_results (sly_data)"| RK
     EC -.->|"env_context (sly_data)"| RK
     RK -.->|"risk_score (sly_data)"| PG
 ```
 
-Solid arrows = Neuro-SAN `tools` references (who may call whom). Dotted arrows = data contracts flowing through the `sly_data` bulletin board (§5.4).
+Solid arrows = Neuro-SAN `tools` references (who may call whom). Dotted arrows = data contracts flowing through the `sly_data` bulletin board (§5.4). The security review is an **adaptive fan-out**: `review_planner` partitions the reviewable surface into 1–4 shards and returns the exact reviewer agents to invoke; the frontman calls them one at a time (parallel batch is the post-hackathon optimization — §5.2). Review synthesis is deterministic (`report_publisher`), not an LLM agent (§5.4 framework constraint).
 
 **Naming convention:** coded-tool labels in diagrams/tables use module names; the HOCON tool `name` drops the `_tool` suffix — module `coded_tools/sentinel/test_runner_tool.py` (class `TestRunnerTool`) is registered as tool `test_runner`. Authoritative mapping: [LLD §3 and §5](04-lld.md).
 
 ### 5.2 Orchestration model
 
-- The **frontman** (`delivery_coordinator`) is the single client-facing agent. Its instructions encode an **explicit numbered pipeline** (Neuro-SAN best practice for multi-step orchestration): 1) intake → 2) change analysis → 3) parallel review (security + quality) → 4) synthesis → 5) test selection → 6) test execution → 7) environment context → 8) risk scoring → 9) gating → 10) final structured response.
-- Steps 3's two review agents and step 7 are **independent by contract** — the frontman issues those tool calls in parallel (LLM parallel tool-calling); the pipeline order for dependent stages is enforced by instruction and by the fact that each stage's _required input contract_ only exists in `sly_data` after its producer ran.
+- The **frontman** (`delivery_coordinator`) is the single client-facing agent. Its instructions encode an **explicit numbered pipeline** (Neuro-SAN best practice for multi-step orchestration): 1) change analysis → 2) **review planning** (deterministic `review_planner` sizes the security review) → 3) **security-review fan-out** (the 1–4 shard reviewers named by the planner, invoked one at a time) → 4) senior security summary → 5) code-quality review → 6) synthesis (deterministic `report_publisher`) → 7) test selection → 8) test execution → 9) environment context → 10) risk scoring → 11) gating → 12) final structured response.
+- The step-3 shard reviewers are **independent by contract**. The design intent is a parallel batch (LLM parallel tool-calling); the hackathon frontman invokes them **strictly sequentially** (one at a time, waiting for each) because mistral's tool-call discipline degrades on the longer chain — parallelism is a post-hackathon latency optimization, never a correctness dependency (the merge is deterministic in code). Every step is one-at-a-time. See the framework-forced deviation in [07 §14](07-implementation-plan.md).
+- **Ordering safety net (framework-forced):** because a long chain can still drop or reorder a step, `report_publisher` (#5) recomputes the deterministic detection floor (secrets + dangerous sinks over the whole change) itself when it synthesizes — so the critical/high deterministic findings are in the report **regardless of whether the LLM reviewers ran in time**. The reviewers still add their LLM-judged findings; the deterministic minimum is guaranteed (rule D2).
 - Specialist agents follow the AAOSA interaction pattern (`aaosa_basic.hocon` substitutions) for delegation semantics, with rich one-line `function.description` entries — descriptions are the routing layer.
 - **Test execution is deliberately not an LLM agent.** `test_runner_tool` is a plain `CodedTool` attached to the frontman: running tests is a deterministic act with no judgment in it (principle D2). Judgment (which tests) lives before it; interpretation (what results mean) lives after it.
 
@@ -158,10 +168,10 @@ Full HOCON, instructions text, and function schemas are in the LLD ([04-lld.md](
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Type     | LLM agent (frontman — only agent exposed to clients)                                                                                                                                                                                                                        |
 | LLM      | `nvidia-llama-3.3-70b-instruct`                                                                                                                                                                                                                                             |
-| Tools    | All 8 specialist agents + `test_runner_tool`                                                                                                                                                                                                                                |
+| Tools    | All specialist agents (change analysis, the 1–4 `security_reviewer_*`, `senior_security_agent`, code quality, test selection, environment context, risk scoring, promotion gating) + the coded tools `review_planner_tool`, `report_publisher_tool`, `test_runner_tool`      |
 | Input    | Canonical `DeliveryEvent` JSON in the chat message; secrets/workspace in `sly_data`                                                                                                                                                                                         |
-| Output   | Final structured run summary (text) + allow-listed `sly_data` payload to client: `run_id`, `review_report`, `risk_score`, `decision`                                                                                                                                        |
-| Behavior | Validates the event, executes the 10-step pipeline, never skips risk scoring or gating, never invents stage outputs — if a stage fails it records the failure and routes to gating with a `stage_failure` flag (which the risk formula treats as elevated risk, fail-safe). |
+| Output   | Final structured run summary (text) + allow-listed `sly_data` payload to client: `run_id`, `change_profile`, `review_plan`, `review_report`, `test_plan`, `test_results`, `env_context`, `risk_score`, `decision`                                                           |
+| Behavior | Validates the event, executes the 12-step pipeline (§5.2) strictly one tool call at a time, never skips risk scoring or gating, never invents stage outputs — if a stage fails it records the failure and routes to gating with a `stage_failure` flag (which the risk formula treats as elevated risk, fail-safe). |
 
 #### 2. 🧩 `change_analysis_agent`
 
@@ -173,15 +183,27 @@ Full HOCON, instructions text, and function schemas are in the LLD ([04-lld.md](
 | Produces   | **`change_profile`** contract → sly_data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Behavior   | Obtains the diff, extracts changed files/functions via tree-sitter AST, builds the import-level dependency graph, computes **blast radius** (reverse reachability from changed modules), classifies the change (`feature / bug_fix / refactor / config / docs / mixed`), and sets **sensitive-area flags** by matching changed paths & symbols against the sensitive-area ruleset (auth, payments, data-deletion, migrations, public API surfaces). The LLM's role: classify ambiguous changes, name the blast radius in human terms; all raw facts come from the tools. |
 
-#### 3. 🔒 `security_review_agent`
+#### 3. 🔒 Security review — adaptive fan-out (`review_planner` → `security_reviewer_1..4` → `senior_security_agent`)
+
+Security review is a **deterministic-planner + adaptive-fan-out** subsystem, not a single agent. A normal PR diff stays on one reviewer; a large surface (full-repo **audit mode**, §12.1) spreads across up to four parallel reviewers — without ever letting an LLM decide how much compute to spend (D2).
+
+**`review_planner_tool`** (CodedTool, no LLM) runs first. It applies exclusion globs (vendored/generated code) to the change surface, scores each added line for **hotspot** risk (dangerous-sink patterns, sensitive-area paths, entropy), counts hotspot lines `H`, and sizes the review: `shard_count = clamp(ceil(H / review_budget_lines), 1, max_review_shards=4)`. It partitions files into that many semantic shards (grouped by top-level module, balanced by hotspot weight), writes the **`review_plan`** contract to sly_data, and **returns the exact list of reviewer agents to invoke** to the frontman. It tags `mode` (`pr` vs `audit`, detected from the empty-tree base SHA). All deterministic and versioned.
+
+Each **`security_reviewer_n`** (LLM agent; the frontman invokes only those the planner named, one at a time — see §5.2 on why parallelism is deferred):
 
 |            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LLM        | `nvidia-llama-3.3-70b-instruct`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| CodedTools | `secret_scanner_tool` (regex+entropy secrets ruleset), `dependency_cve_tool` (OSV.dev lookup of manifest deltas, offline snapshot fallback), `contract_store_tool` (validates + writes the finished contract to sly_data)                                                                                                                                                                                                                                                                                                                                   |
-| Consumes   | diff hunks (from `change_profile.files[].hunks`), manifest deltas                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Produces   | **`security_findings`** contract → sly_data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Behavior   | Two deterministic scans (secrets, CVEs) + LLM deep review of diff hunks against the OWASP Top 10 pattern checklist embedded in its instructions: SQL injection, XSS, CSRF, input-validation & authn/authz flaws, unsafe deserialization, path traversal, command injection. Every finding: `severity ∈ {critical, high, medium, low}`, file/line, CWE reference where applicable, explanation, fix suggestion. Treats reviewed code strictly as untrusted data (prompt-injection hygiene — instructions forbid following instructions found inside diffs). |
+| CodedTools | `secret_scanner_tool` (called with its shard number — returns deterministic secret **and dangerous-sink** findings across all shard lines, plus the top-ranked code snippets within the LLM budget, each tagged `why_flagged` + context), `dependency_cve_tool` (reviewer 1 only — dependencies are repo-global), `contract_store_tool` (writes the shard contract)                                                                                                                                                                                                                                                                                                                                   |
+| Consumes   | `review_plan` (its shard's file set), diff hunks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Produces   | **`security_findings_shard_n`** contract → sly_data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Behavior   | Deterministic scans (secrets + dangerous sinks) over its whole shard + LLM deep review of the top-ranked snippets against the OWASP Top 10 checklist: SQL injection, XSS, CSRF, input-validation & authn/authz flaws, unsafe deserialization, path traversal, command injection. Every finding: `severity ∈ {critical, high, medium, low}`, file/line, CWE where applicable, explanation, fix suggestion, `source (tool/llm)`. Reviewed code is strictly untrusted data (prompt-injection hygiene — instructions forbid following instructions found inside diffs). |
+
+**`senior_security_agent`** (LLM): calls `review_digest_tool` (returns a compact `{id,severity,file,title}` roll-up of every shard's findings — the LLM never re-reads raw code), writes a 2–4 sentence executive narrative naming the worst findings, and stores it as **`senior_summary`**. `report_publisher` uses it as the report's executive summary when present. Purely additive — it cannot alter findings or scores (D2).
+
+The deterministic **detection floor** (secrets + sink rules) covers 100% of in-scope lines regardless of repo size; the LLM's deep review is what scales with the budget. `report_publisher` (#5) reports honest **coverage** (`total_added_lines`, `llm_reviewed_lines`, `deterministic_coverage_pct`, `unscanned_shards`) so a full-repo audit never reads as "everything was deep-reviewed" when it wasn't.
+
+> _Backport note (2026-07-11):_ this section supersedes the former single `security_review_agent`. Item #5 below (`review_synthesis_agent`) was likewise already realized in code as the deterministic `report_publisher` tool — its finding-merge now also folds in the per-shard contracts (see §5.4).
 
 #### 4. ✅ `code_quality_agent`
 
@@ -259,16 +281,18 @@ Neuro-SAN's `sly_data` dictionary is invisible to LLMs and by default never cros
 1. **Secrets & bulk data:** `git_token`, `repo_workspace` (server-side clone path), raw diffs — never enter any prompt except the specific hunks a review agent must see.
 2. **Stage contracts:** every producer writes its versioned contract under its reserved key; every consumer reads its required inputs. Coded tools share state without round-tripping large JSON through LLM context (cost + reliability + no leakage).
 
-**Framework constraint:** `sly_data` is writable only by coded tools (it is invisible to LLMs). Agents whose contract is finalized by an existing coded tool write through that tool (`dependency_graph` → `change_profile`, `report_publisher` → `review_report`, `risk_calculator` → `risk_score`, `decision_logger` → `decision`). The four agents without such a tool (`security_review`, `code_quality`, `test_selection`, `environment_context`) call the generic **`contract_store`** coded tool as their mandatory final step — it validates the payload against the contract's JSON schema and writes it to the reserved sly_data key.
+**Framework constraint:** `sly_data` is writable only by coded tools (it is invisible to LLMs). Agents whose contract is finalized by an existing coded tool write through that tool (`dependency_graph` → `change_profile`, `review_planner` → `review_plan`, `report_publisher` → `review_report`, `risk_calculator` → `risk_score`, `decision_logger` → `decision`). The agents without such a tool (the `security_reviewer_*` shard reviewers, `senior_security_agent`, `code_quality`, `test_selection`, `environment_context`) call the generic **`contract_store`** coded tool as their mandatory final step — it validates the payload against the contract's JSON schema and writes it to the reserved sly_data key. `report_publisher` then merges the per-shard `security_findings_shard_*` contracts + `quality_findings` into the single `review_report` (deterministic dedup + scoring — rule D2; this replaces the never-built `review_synthesis_agent`).
 
 | Key                           | Producer                  | Consumers                                             |
 | ----------------------------- | ------------------------- | ----------------------------------------------------- |
 | `event`                       | Gateway (client request)  | all                                                   |
 | `git_token`, `repo_workspace` | Gateway                   | git/test tools only                                   |
 | `change_profile`              | change_analysis_agent     | test_selection, security/quality review, risk_scoring |
-| `security_findings`           | security_review_agent (via `contract_store`) | review_synthesis                                      |
-| `quality_findings`            | code_quality_agent (via `contract_store`) | review_synthesis                                      |
-| `review_report`               | review_synthesis_agent    | risk_scoring, Gateway (upstream)                      |
+| `review_plan`                 | review_planner_tool       | security_reviewer_*, report_publisher, Gateway (upstream) |
+| `security_findings_shard_n`   | security_reviewer_n (via `contract_store`) | report_publisher (merge)             |
+| `senior_summary`              | senior_security_agent (via `contract_store`) | report_publisher                    |
+| `quality_findings`            | code_quality_agent (via `contract_store`) | report_publisher                     |
+| `review_report`               | report_publisher_tool     | risk_scoring, Gateway (upstream)                      |
 | `test_plan`                   | test_selection_agent (via `contract_store`) | test_runner_tool                                      |
 | `test_results`                | test_runner_tool          | risk_scoring, Gateway (upstream)                      |
 | `env_context`                 | environment_context_agent (via `contract_store`) | risk_scoring                                          |
@@ -276,7 +300,7 @@ Neuro-SAN's `sly_data` dictionary is invisible to LLMs and by default never cros
 | `decision`                    | promotion_gating_agent    | Gateway (upstream)                                    |
 | `run_id`                      | Gateway                   | all tools (correlation)                               |
 
-Frontman `allow.to_upstream.sly_data = ["run_id", "review_report", "test_results", "risk_score", "decision"]` — the only data that leaves the network. Tokens and workspaces never do.
+Frontman `allow.to_upstream.sly_data = ["run_id", "change_profile", "review_plan", "review_report", "test_plan", "test_results", "env_context", "risk_score", "decision"]` — the only data that leaves the network (the per-shard `security_findings_shard_*` stay in-network; their content reaches the Gateway already merged inside `review_report`). Tokens and workspaces never do.
 
 ## 6. Risk Scoring Model (Deterministic, Versioned)
 
@@ -355,7 +379,9 @@ Every contract carries `schema_version`, `run_id`, `produced_by`, `produced_at`.
 | `DeliveryEvent`              | `event_id`, `source (github/jenkins/gitlab/manual)`, `repo{url,name,default_branch}`, `change{base_sha,head_sha,branch,pr_id?,title,description,author}`, `target_transition{from_env,to_env}`, `requested_by` |
 | `ChangeProfile`              | `files[{path,language,change_type,hunks,functions_changed[]}]`, `new_functions[]`, `classification`, `loc_added/removed`, `blast_radius{direct[],transitive[],count}`, `sensitive_flags[]`                     |
 | `Finding` (security/quality) | `id`, `category`, `severity`, `file`, `line_start/end`, `cwe?`, `title`, `explanation`, `fix_suggestion`, `source (tool/llm)`                                                                                  |
-| `ReviewReport`               | `executive_summary`, `findings[] (deduped, ranked)`, `pr_health_score`, `recommendation (approve/approve_with_changes/request_changes)`                                                                        |
+| `ReviewPlan`                 | `mode (pr/audit)`, `budget_lines`, `shards[{shard,label,files[],hotspot_weight}]`, `metrics{files_scanned,excluded_files,added_lines,hotspot_lines,shard_count,basis}`                                          |
+| `ReviewReport`               | `executive_summary`, `findings[] (deduped, ranked)`, `pr_health_score`, `recommendation (approve/approve_with_changes/request_changes)`, `coverage?{total_added_lines,llm_reviewed_lines,deterministic_coverage_pct,shards,unscanned_shards}` |
+| `SeniorSummary`              | `summary` (executive narrative from `senior_security_agent`; becomes `ReviewReport.executive_summary` when present)                                                                                            |
 | `TestPlan`                   | `selected[{test_id,reason,mapping_source}]`, `smoke_set[]`, `excluded_summary`, `selection_confidence`, `estimated_runtime`                                                                                    |
 | `TestResults`                | `runner`, `command`, `totals{passed,failed,skipped}`, `cases[{test_id,status,duration,failure_message?,stack?}]`, `coverage_delta?`, `duration`, `timed_out`                                                   |
 | `EnvContext`                 | `target_env`, `incidents{count,most_recent_at}`, `deploy_window{risky,reason}`, `env_stability`, `batch_size`, `flags[]`                                                                                       |
@@ -388,6 +414,16 @@ The Gateway implements one **adapter interface** (`inbound: webhook→DeliveryEv
 | Promotion action | `workflow_dispatch` on deploy workflow / Deployments API                                                                        | Trigger parameterized deploy job (`/job/…/buildWithParameters`)            | Trigger pipeline (`POST /projects/:id/trigger/pipeline`) with env var |
 | Review comment   | PR comment via Issues API                                                                                                       | Build description / PR comment via plugin when GitHub-backed               | MR note via Notes API                                                 |
 | Demo mode        | Simulated: Gateway `/api/v1/simulate` endpoint replays recorded webhook payloads — identical code path, no live platform needed |
+
+### 12.1 Audit mode (full-repo, integration-free)
+
+Sentinel normally reviews a **diff** (`base_sha..head_sha`). **Audit mode** points the same pipeline at an **entire repository** with no CI integration and no prepared diff — the standalone "run it on any public repo" path.
+
+- **Mechanism (zero new pipeline code):** the change surface is diffed against the git **empty-tree** object (`4b825dc642cb6eb9a060e54bf8d69288fbee4904`), so every file reads as fully added. `git_diff_tool` / `ast_analyzer_tool` / `dependency_graph_tool` handle this unchanged.
+- **Entry points:** `scripts/run_repo.py --full <url>` (localhost helper), or a `/api/v1/simulate` `DeliveryEvent` whose `change.base_sha` is the empty-tree hash. `review_planner` detects the empty-tree base and tags `review_plan.mode = "audit"`.
+- **Adaptive cost:** the whole-repo surface is exactly what the fan-out (§5.3 #3) exists for — `review_planner` sizes 1–4 reviewers by hotspot volume so a medium repo is reviewed in parallel without an unbounded single-agent context.
+- **The decision is _advisory_ in audit mode.** The risk formula (§6) is change-churn-driven, so treating a whole repo as one change pegs churn factors high and the band toward `critical` — correct for a "safe to promote _this change_?" question, meaningless as a repo-health verdict. Consumers read the **review findings + honest coverage** (§5.3 #3), not the promote/hold/escalate verdict. The helper prints an explicit `AUDIT MODE … decision is advisory` banner.
+- **Coverage honesty:** the deterministic detection floor (secrets + dangerous-sink rules) covers 100% of in-scope lines regardless of repo size; LLM deep-review scales with the per-agent budget and shard count; `report_publisher` reports what was deep-reviewed vs scanned so audit output never over-claims.
 
 ## 13. Persistence — Risk History Store (PostgreSQL)
 
@@ -435,13 +471,14 @@ AuthN/Z: hackathon = static bearer token; production = OIDC (company SSO) with r
 
 ## 18. Hackathon MVP Scope
 
-1. ✅ Working Neuro-SAN network — all 10 components (§5.3) configured in `registries/sentinel.hocon`, 17 coded tools implemented.
+1. ✅ Working Neuro-SAN network — all components (§5.3) configured in `registries/sentinel.hocon`, 19 coded tools implemented (incl. `review_planner`, `review_digest`).
 2. ✅ Sample multi-language repos: `samples/python-payments-service` (Flask + pytest), `samples/node-catalog-service` (Express + Jest) — proving manifest-driven language agnosticism.
 3. ✅ **Demo Run 1 — happy path:** small low-risk change → clean parallel review → small relevant test subset selected & passing → low score → auto-promote (dev→test) with full reasoning trail on the dashboard.
 4. ✅ **Demo Run 2 — the escalation (money shot):** change touching the auth module with planted string-concatenated SQL **and a hardcoded secret** → Security Review flags **two Criticals** → risk 95 (≥75, critical band; §6 worked check) **although every test passes** → gating escalates to human approval, reasoning trail explicitly citing both security findings; approver resolves it live in the dashboard.
 5. ✅ Side-by-side reasoning trails (dashboard) + live agent choreography (NSFlow).
 6. CI/CD platform scope: **GitHub Actions adapter + simulate mode only**; Jenkins and GitLab CI remain specified as the extension contract (§12), implemented post-hackathon.
 7. Stretch: live GitHub webhook (not simulated); seeded `incidents` row visibly shifting a repeat run's score; Slack/Teams notification on the approval step.
+8. Post-M4 enhancement (built): **audit mode** (§12.1) + **adaptive security-review fan-out** (§5.3 #3) — `scripts/run_repo.py --full` runs the whole pipeline over any public repo, `review_planner` sizing 1–4 parallel reviewers by hotspot volume, with honest deep-review coverage reporting.
 
 ## 19. Success Metrics
 

@@ -48,7 +48,7 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with prov
 | [01 · Proposed Solution](docs/solution/01-proposed-solution.md) | What the system is and exactly how it works: 10-component agent network, risk formula, trust ladder, data contracts                          |
 | [02 · DFD](docs/solution/02-dfd.md)                             | How data moves: context → system → subsystem drill-downs, flow invariants                                                                    |
 | [03 · HLD](docs/solution/03-hld.md)                             | How it deploys and survives: K8s + docker-compose, security model, failure modes, design decisions                                           |
-| [04 · LLD](docs/solution/04-lld.md)                             | How to build it: full network HOCON, 16 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
+| [04 · LLD](docs/solution/04-lld.md)                             | How to build it: full network HOCON, 19 coded-tool specs, PostgreSQL DDL, Gateway API, CI/CD adapters (GitHub Actions / Jenkins / GitLab CI) |
 | [05 · Architecture](docs/solution/05-architecture-diagram.md)   | The pictures: landscape, containers, agent topology, signal flow, deployments                                                                |
 
 All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown Preview Mermaid Support extension).
@@ -58,7 +58,7 @@ All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown P
 ```mermaid
 flowchart LR
     CI["GitHub Actions / Jenkins / GitLab CI"] -->|webhook| GW["Delivery Gateway<br/>(FastAPI)"]
-    GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>sentinel<br/>9 agents + 16 coded tools"]
+    GW -->|"canonical DeliveryEvent"| NS["Neuro-SAN network<br/>sentinel<br/>adaptive agents + 19 coded tools"]
     NS -->|"NIM llama-3.3-70b"| NIM["NVIDIA NIM"]
     NS --> PG[("PostgreSQL<br/>risk history + audit")]
     GW --> DB["Decision Dashboard<br/>reports · trails · approvals"]
@@ -122,6 +122,14 @@ Full step-by-step (localhost + public-URL paths, real tests, troubleshooting): *
 $env:PYTHONPATH="."; .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo
 ```
 
+By default this reviews the repo's **last commit** (`HEAD~1..HEAD`). To review the **whole repo** (no CI integration, no diff), add `--full`:
+
+```powershell
+$env:PYTHONPATH="."; .venv\Scripts\python.exe scripts\run_repo.py --full https://github.com/owner/repo
+```
+
+`--full` is **audit mode**: it diffs against the git empty-tree so every file reads as added, then the security review adaptively fans out across 1–4 parallel reviewers sized to the repo (`review_planner`). The output is the review findings + honest coverage (how much was deep-reviewed vs deterministically scanned). **The promote/escalate decision is advisory in audit mode** — the risk formula is change-churn-driven, so a whole-repo "change" pegs risk high by construction; read the findings, not the verdict. The helper prints an `AUDIT MODE` banner to make this explicit.
+
 ### GitHub Action gate
 
 Gate any repo's PRs on Sentinel's decision with [`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml) — copy it into the target repo's `.github/workflows/`. On each PR it builds a `github`-source DeliveryEvent and `POST`s it to `/api/v1/simulate`; the Gateway clones the repo server-side, runs the pipeline, and returns a decision. The check **fails unless the decision is `promote`** (escalate/hold block the merge until reviewed in the dashboard).
@@ -136,7 +144,8 @@ Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gat
 ## Status
 
 - ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md)) + full design ([docs/solution/](docs/solution/))
-- ✅ **Implementation** (host-native): 17 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`), Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ✅ **Implementation** (host-native): 19 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ✅ **Audit mode + adaptive security fan-out**: `scripts/run_repo.py --full` runs the whole pipeline over any public repo; `review_planner` sizes 1–4 parallel `security_reviewer_*` by hotspot volume; `report_publisher` reports honest deep-review coverage (`scripts/verify_audit.py`).
 - ✅ GitHub Action gate for real repos ([`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml)) — PRs post to `/api/v1/simulate`, check fails unless `promote`.
 - ⬜ Phase 6 hardening + in-browser rehearsal (see [TASKS.md](TASKS.md)).
 

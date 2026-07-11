@@ -80,7 +80,7 @@ flowchart TD
 
     P1("P1 Ingest & Normalize<br/>Delivery Event<br/><i>[Gateway]</i>")
     P2("P2 Analyze Change<br/><i>[change_analysis_agent]</i>")
-    P3("P3 Review Code<br/><i>[security + quality + synthesis]</i>")
+    P3("P3 Review Code<br/><i>[planner + 1–4 security reviewers + senior + quality + synthesis]</i>")
     P4("P4 Select & Execute Tests<br/><i>[test_selection_agent + test_runner_tool]</i>")
     P5("P5 Score Risk & Gate Promotion<br/><i>[env_context + risk_scoring + promotion_gating]</i>")
     P6("P6 Resolve Human Approval<br/><i>[Gateway + Dashboard]</i>")
@@ -171,42 +171,43 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    F4["F4 change_profile"] --> P31
-    F4 --> P32
+    F4["F4 change_profile"] --> P30
     D2[("D2 Run Workspace<br/>(diff hunks)")]
-
-    subgraph PAR["parallel"]
-        P31("P3.1 Security Review<br/><i>security_review_agent</i>")
-        P32("P3.2 Quality Review<br/><i>code_quality_agent</i>")
-    end
-
-    P311("P3.1a Scan Secrets<br/><i>secret_scanner_tool</i>")
-    P312("P3.1b Check Dependency CVEs<br/><i>dependency_cve_tool</i>")
-    P321("P3.2a Measure Complexity<br/><i>complexity_metrics_tool</i>")
-
     E6["E6 OSV.dev"]
 
-    D2 --> P31
-    D2 --> P32
-    P31 --> P311
-    P31 --> P312
-    P312 <--> E6
-    P32 --> P321
+    P30("P3.0 Size Review into Shards<br/><i>review_planner_tool (deterministic, no LLM)</i>")
+    D2 --> P30
 
-    P311 -- "secret hits" --> P31
-    P312 -- "CVE findings" --> P31
-    P321 -- "complexity metrics" --> P32
+    subgraph PAR["security reviewers — 1–4 adaptive fan-out"]
+        P31a("P3.1 security_reviewer_1<br/><i>+ secret_scanner (shard 1) + dependency_cve</i>")
+        P31n("P3.1 security_reviewer_n<br/><i>+ secret_scanner (shard n)</i>")
+    end
 
-    P31 -- "F5 security_findings<br/>(severity, CWE, line, fix)" --> P33
-    P32 -- "F6 quality_findings<br/>(+ quality_score)" --> P33
+    P30 -- "review_plan<br/>(shard count 1–4 + reviewer list)" --> P31a
+    P30 -- "review_plan" --> P31n
+    D2 --> P31a
+    D2 --> P31n
+    P31a <--> E6
 
-    P33("P3.3 Synthesize Review<br/><i>review_synthesis_agent</i>")
-    P33 -- "F7 review_report<br/>(deduped, ranked, health score,<br/>recommendation)" --> OUT1["→ sly_data (consumed by P5)"]
-    P33 -- "F7 persist" --> D1[("D1 Risk History Store")]
-    P33 -- "F13 publish request" --> P7["P7 (PR/MR comment)"]
+    P31a -- "F5 security_findings_shard_1<br/>(via contract_store)" --> P34
+    P31n -- "F5 security_findings_shard_n<br/>(via contract_store)" --> P34
+    P31a -- "shard findings" --> P32
+    P31n -- "shard findings" --> P32
+
+    P32("P3.2 Senior Security Summary<br/><i>senior_security_agent + review_digest_tool</i>")
+    P32 -- "senior_summary" --> P34
+
+    P33("P3.3 Quality Review<br/><i>code_quality_agent + complexity_metrics_tool</i>")
+    D2 --> P33
+    P33 -- "F6 quality_findings (+ quality_score)" --> P34
+
+    P34("P3.4 Merge, Score & Cover<br/><i>report_publisher_tool (deterministic)</i>")
+    P34 -- "F7 review_report<br/>(deduped, ranked, health score,<br/>recommendation, coverage)" --> OUT1["→ sly_data (consumed by P5)"]
+    P34 -- "F7 persist" --> D1[("D1 Risk History Store")]
+    P34 -- "F13 publish request" --> P7["P7 (PR/MR comment)"]
 ```
 
-Dedup rule in P3.3: findings sharing `(file, overlapping line range, root cause category)` merge, keeping highest severity and both explanations (detail: LLD §3, `review_synthesis_agent` instructions).
+Dedup rule in P3.4: findings sharing `(file, overlapping line range, root cause category)` merge, keeping highest severity and both explanations — done deterministically in the `report_publisher_tool` merge (detail: LLD §5).
 
 ### 3.3 P4 — Select & Execute Tests
 
@@ -337,9 +338,10 @@ flowchart TD
 | F2   | Repo content      | Shallow clone at `head_sha`; `F2a` unified diff + file list; `F2b` changed symbols; `F2c` dependents/blast radius                                                                                         | E4 → D2; internal P2                                         |
 | F3   | DeliveryEvent     | `event_id, source, repo{...}, change{base_sha, head_sha, branch, pr_id?, title, description, author}, target_transition{from_env, to_env}, requested_by` + sly_data `{run_id, git_token, repo_workspace}` | P1 → P2/P5 (via streaming_chat)                              |
 | F4   | change_profile    | `files[], new_functions[], classification, loc_added/removed, blast_radius{}, sensitive_flags[]`                                                                                                          | P2 → P3, P4, P5                                              |
-| F5   | security_findings | `Finding[]`: `severity, category, file, line, cwe?, title, explanation, fix_suggestion, source`                                                                                                           | P3.1 → P3.3                                                  |
-| F6   | quality_findings  | `Finding[]` + `quality_score`                                                                                                                                                                             | P3.2 → P3.3                                                  |
-| F7   | review_report     | `executive_summary, findings[] (deduped/ranked), pr_health_score, recommendation`                                                                                                                         | P3.3 → P5, D1, P7                                            |
+| F4a  | review_plan       | `shard_count (1–4), reviewers[]{shard, files[], hotspots}` — sized by hotspot volume                                                                                                                       | P3.0 review_planner → P3.1 reviewers                        |
+| F5   | security_findings_shard_n | `Finding[]` per shard: `severity, category, file, line, cwe?, title, explanation, fix_suggestion, source, shard`                                                                                                           | P3.1 (N reviewers, via contract_store) → P3.4               |
+| F6   | quality_findings  | `Finding[]` + `quality_score`                                                                                                                                                                             | P3.2 → P3.4                                                  |
+| F7   | review_report     | `executive_summary, findings[] (deduped/ranked), pr_health_score, recommendation, coverage{}`                                                                                                             | P3.4 → P5, D1, P7                                            |
 | F8   | test_plan         | `selected[{test_id, reason, mapping_source}], smoke_set[], excluded_summary, selection_confidence, estimated_runtime`; `F8a` raw test↔source map                                                          | P4.2 → P4.3, D1                                              |
 | F9   | test_results      | `runner, command, totals{}, cases[], coverage_delta?, duration, timed_out`                                                                                                                                | P4.4 → P5, D1                                                |
 | F10  | env_context       | `target_env, incidents{}, deploy_window{}, env_stability, batch_size, flags[]`                                                                                                                            | P5.1 → P5.2                                                  |

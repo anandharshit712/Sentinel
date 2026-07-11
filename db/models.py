@@ -53,6 +53,13 @@ findings = Table(
     Column("payload", JSONB, nullable=False),
 )
 
+review_plans = Table(
+    "review_plans", metadata,
+    Column("run_id", _UUID, primary_key=True),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", _TS, server_default=func.now()),
+)
+
 test_plans = Table(
     "test_plans", metadata,
     Column("run_id", _UUID, primary_key=True),
@@ -153,6 +160,7 @@ notifications = Table(
 # name -> Table, for generic per-run payload writes
 RUN_PAYLOAD_TABLES = {
     "review_reports": review_reports,
+    "review_plans": review_plans,
     "test_plans": test_plans,
     "test_results": test_results,
     "env_contexts": env_contexts,

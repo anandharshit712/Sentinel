@@ -4,7 +4,7 @@ sly_data is writable only by coded tools (01 §5.4), yet the security/quality/te
 environment agents each produce a contract. This tool is their mandatory final step: it stamps the
 envelope, JSON-schema-validates the payload against the named contract, and writes it to sly_data.
 The contract_name enum is restricted so it can never overwrite a tool-owned contract
-(change_profile, review_report, risk_score, decision).
+(change_profile, review_plan, review_report, risk_score, decision).
 """
 from __future__ import annotations
 
@@ -17,7 +17,12 @@ from lib import contracts
 
 logger = logging.getLogger("coded_tools.contract_store")
 
-_ALLOWED = {"security_findings", "quality_findings", "test_plan", "env_context"}
+_ALLOWED = {
+    "security_findings", "quality_findings", "test_plan", "env_context",
+    # adaptive security fan-out: per-shard reviewer findings + senior narrative
+    "security_findings_shard_1", "security_findings_shard_2",
+    "security_findings_shard_3", "security_findings_shard_4", "senior_summary",
+}
 
 
 class ContractStoreTool(CodedTool):

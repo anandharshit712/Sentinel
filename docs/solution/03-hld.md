@@ -42,7 +42,7 @@ flowchart TB
     subgraph P2["Intelligence Plane — Neuro-SAN Server"]
         direction LR
         REG["Registry: sentinel.hocon<br/>(manifest.hocon)"]
-        AG["9 LLM agents + 17 coded tools<br/>(AGENT_TOOL_PATH)"]
+        AG["up to 13 LLM agents (1–4 of 4 reviewers)<br/>+ 19 coded tools<br/>(AGENT_TOOL_PATH)"]
         LLM["llm_config: NIM primary<br/>+ fallbacks"]
     end
 
@@ -80,7 +80,7 @@ flowchart TB
 | HOCON agent registry + manifest (`AGENT_MANIFEST_FILE`)                                             | `registries/sentinel.hocon` in `registries/manifest.hocon`              | LLD §2                             |
 | Frontman pattern (first tool, no `parameters`)                                                      | `delivery_coordinator`                                                               | LLD §3                             |
 | AAOSA substitutions (`aaosa_basic.hocon`)                                                           | specialist delegation semantics                                                      | LLD §3                             |
-| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 17 tools under `coded_tools/sentinel/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
+| CodedTool (`neuro_san.interfaces.coded_tool.CodedTool`, `async_invoke(args, sly_data)`)             | all 19 tools under `coded_tools/sentinel/` (`AGENT_TOOL_PATH`)          | LLD §5                             |
 | `sly_data` + `allow` blocks (`to_upstream` allow-list)                                              | secure bulletin board & result egress                                                | 01 §5.4, LLD §3 (frontman `allow`) |
 | Per-agent `llm_config` + `fallbacks` + `${?MODEL_NAME}`                                             | NIM primary, right-sizing, provider agnosticism                                      | LLD §6                             |
 | `structure_formats: "json"`                                                                         | frontman's final structured payload parsing                                          | LLD §3                             |
@@ -133,15 +133,15 @@ sequenceDiagram
     GW->>NS: POST /api/v1/sentinel/streaming_chat<br/>{user_message: event JSON, sly_data: {event, run_id, git_token, repo_workspace}}
     activate NS
     NS->>AG: change_analysis → change_profile
-    par security review
-        NS->>AG: security_review
-    and quality review
-        NS->>AG: code_quality
-    and environment context
-        NS->>AG: environment_context
+    NS->>AG: review_planner → agents_to_invoke (1–4 shards, deterministic sizing)
+    loop security reviewers (1–4 shards, sequential; parallel is post-hackathon)
+        NS->>AG: security_reviewer_1 … security_reviewer_n
     end
+    NS->>AG: code_quality
+    NS->>AG: environment_context
     AG->>NIM: prompts (per-agent llm_config)
-    NS->>AG: review_synthesis → review_report
+    NS->>AG: senior_security_agent → review_digest → senior_summary
+    NS->>AG: report_publisher → review_report (deterministic synthesis)
     AG->>PG: persist report/findings
     NS-->>GW: stream: review ready (relayed to dashboard SSE + PR comment)
     NS->>AG: test_selection → test_plan
@@ -170,7 +170,7 @@ sequenceDiagram
 | ------------------------------ | -------------------------------------- | ------------------------------ |
 | Webhook→invoke                 | < 5 s                                  | shallow clone                  |
 | Change analysis                | 5–15 s                                 | 1–2 LLM turns + tools          |
-| Parallel reviews               | 10–30 s                                | LLM reasoning over hunks       |
+| Parallel reviews (adaptive fan-out) | 10–30 s | adaptive 1–4-way security fan-out — wall-clock ≈ one reviewer, not sum; + deterministic `review_planner` sizing step |
 | Synthesis (report delivered)   | +5–15 s                                | 1 LLM turn                     |
 | Test selection                 | 5–10 s                                 | mapping tool + 1 turn          |
 | Test execution                 | dominated by repo's own subset runtime | native runner                  |
@@ -284,7 +284,7 @@ Decisions: Gateway and neuro-san scale independently (webhook bursts vs LLM-boun
 | #   | Decision                                                            | Rationale                                                                                                         | Alternative rejected                                           |
 | --- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | A1  | Thin Gateway outside the agent network                              | 3 webhook dialects + human API don't belong in agents; network stays portable; auth boundary                      | Webhook parsing in coded tools (couples network to platforms)  |
-| A2  | Single network, frontman-orchestrated explicit pipeline             | One reasoning trail, one entry point, matches Neuro-SAN best practice (numbered pipeline + AAOSA for specialists) | Multiple chained networks (more moving parts, split trails)    |
+| A2  | Single network, frontman-orchestrated explicit pipeline             | One reasoning trail, one entry point, matches Neuro-SAN best practice (numbered pipeline + AAOSA for specialists); pipeline is fixed/sequential except the security-review step, which is an adaptive parallel fan-out sized by a deterministic planner | Multiple chained networks (more moving parts, split trails)    |
 | A3  | LLM reasons / code decides (formula, policy, runner as coded tools) | Auditability, replayability, prompt-injection firewall, deterministic demos                                       | LLM-computed scores (unauditable, gameable)                    |
 | A4  | Raise-only LLM risk escalation                                      | Keeps human-favoring safety with LLM insight                                                                      | Full LLM override (unsafe) / no LLM input (loses edge cases)   |
 | A5  | NIM primary + fallbacks + env-override                              | Enterprise code-privacy (self-host), hackathon-available; provider swap without HOCON edits                       | Hard-wiring one SaaS LLM                                       |
@@ -303,6 +303,7 @@ Decisions: Gateway and neuro-san scale independently (webhook bursts vs LLM-boun
 | Webhook storms / monorepo bursts                                 | Gateway concurrency caps + `received` queue; HPA; platform retry semantics honored (202-fast)                                                                 |
 | Long test suites stall sessions                                  | Sandbox `activeDeadlineSeconds` + network `max_execution_seconds=3600`; timeout ⇒ fail-safe risk contribution                                                 |
 | Secrets leakage via prompts/logs                                 | sly_data-only transport; hunk-scoped prompt assembly; log redaction; secret scanner dogfooded on own logs                                                     |
+| Long 12-step chain drops/reorders a step on mistral (`report_publisher` ran before reviewers → empty review) | Reviewers invoked strictly sequentially (parallel deferred post-hackathon) + `report_publisher` recomputes the deterministic secret/sink floor so critical findings are guaranteed regardless of ordering; `verify_b4`/`verify_audit` 3/3 gates |
 
 ## 13. Technology Stack (Pinned Intent)
 

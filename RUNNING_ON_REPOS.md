@@ -36,12 +36,16 @@ $env:PYTHONPATH="."
 .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo
 ```
 
-- No `--base`/`--head` → it uses the **last two commits** on the default branch (base=`HEAD~1`, head=`HEAD`).
+- No `--base`/`--head` → it uses the **last two commits** on the default branch (base=`HEAD~1`, head=`HEAD`). This reviews only the last commit.
 - It prints a **watch URL** — open `http://localhost:8000/runs/<id>` to see the agent graph stream — then polls until the run finishes and prints `decision / risk / criticals`.
 
 Options:
 
 ```powershell
+# audit the WHOLE repo (no diff): diffs vs the git empty-tree, so every file reads as added.
+# The security review adaptively fans out across 1-4 parallel reviewers sized to the repo.
+.venv\Scripts\python.exe scripts\run_repo.py --full https://github.com/owner/repo
+
 # a specific commit range (a PR's base..head)
 .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo --base <sha> --head <sha>
 
@@ -51,6 +55,8 @@ Options:
 # if the Gateway requires auth (API_TOKENS set)
 .venv\Scripts\python.exe scripts\run_repo.py https://github.com/owner/repo --token secrettoken
 ```
+
+**Audit mode (`--full`) semantics.** Use it to point Sentinel at any repo with zero CI wiring. The deliverable is the **review report + coverage** (secrets/dangerous-sink rules cover 100% of scanned lines; the LLM deep-reviews the highest-risk lines within its budget, spread across the fan-out). The **promote/escalate decision is advisory** here: the risk formula scores a *change*, and treating a whole repo as one change pegs churn factors high, so the band will skew toward `escalate` regardless of quality. Read the findings, not the verdict — the helper prints an `AUDIT MODE … decision is advisory` banner.
 
 `repo.name` is derived as `owner/repo` from the URL so it matches [`config/repo_config.yaml`](config/repo_config.yaml) keys (timeouts, `install_deps`, sensitive rules).
 

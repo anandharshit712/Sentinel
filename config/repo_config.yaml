@@ -11,6 +11,10 @@ defaults: &defaults
     - "Sat"
     - "Sun"
   freeze_dates: []               # e.g. ["2026-12-24", "2026-12-31"]
+  # Adaptive security-review fan-out (review_planner / secret_scanner, 04 §5.18).
+  review_budget_lines: 800       # per-reviewer LLM snippet budget (hotspot lines / shard)
+  max_review_shards: 4           # ceiling on parallel security_reviewer_* agents
+  exclude_globs: []              # extra vendored/generated exclusions on top of lib/triage built-ins
 
 repos:
   python-payments-service:
@@ -42,3 +46,9 @@ repos:
       - flag: "auth"
         path_globs: ["**/auth/**"]
         symbol_regexes: ["(?i)(authenticate|login|token|password|jwt)"]
+
+  # Tiny per-agent budget so a small repo forces a multi-shard fan-out — used by
+  # scripts/verify_audit.py to exercise the parallel security-reviewer batch deterministically.
+  audit-smoke:
+    <<: *defaults
+    review_budget_lines: 5
