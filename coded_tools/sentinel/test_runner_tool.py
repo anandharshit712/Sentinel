@@ -75,6 +75,56 @@ def _detect_runner(repo: str) -> str:
     return "none_detected"
 
 
+_JS_TEST_ID = re.compile(r"\.(?:js|jsx|ts|tsx)$", re.I)
+
+
+def _runner_for_id(test_id: str) -> Optional[str]:
+    """Runner implied by a selected test id's file extension (before any `::` nodeid part).
+
+    A polyglot repo (e.g. a Python backend + React front-ends) selects test files across
+    languages, but _detect_runner picks ONE runner globally — feeding JS/TS test files to pytest
+    collects 0 tests and reports a silent 0/0/0. Route each id to the matching runner instead.
+    """
+    path = test_id.split("::", 1)[0]
+    if path.endswith(".py"):
+        return "pytest"
+    if _JS_TEST_ID.search(path):
+        return "jest"
+    return None
+
+
+def _merge_payloads(payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Combine per-runner payloads into one test_results (contract has a single `runner` field,
+    so it's set to whichever runner executed the most tests)."""
+    totals = {"passed": 0, "failed": 0, "skipped": 0, "errors": 0}
+    cases: List[Dict[str, Any]] = []
+    cmds, fails, sel_ids = [], [], []
+    duration, timed_out, suite_total, executed, excluded = 0.0, False, 0, 0, 0
+    for p in payloads:
+        for k, v in p["totals"].items():
+            totals[k] = totals.get(k, 0) + v
+        cases += p["cases"]
+        if p.get("command"):
+            cmds.append(p["command"])
+        if p.get("stage_failure"):
+            fails.append(f'{p["runner"]}: {p["stage_failure"]}')
+        duration += p["duration_seconds"]
+        timed_out = timed_out or p["timed_out"]
+        suite_total += p.get("suite_total", 0)
+        executed += p.get("executed", 0)
+        excluded += p.get("excluded", 0)
+        sel_ids += p.get("selected_ids", [])
+    runner = max(payloads, key=lambda p: sum(p["totals"].values()))["runner"]
+    out: Dict[str, Any] = {"runner": runner, "command": " ; ".join(cmds), "totals": totals,
+                           "cases": cases, "duration_seconds": round(duration, 3),
+                           "timed_out": timed_out, "suite_total": suite_total,
+                           "executed": executed, "excluded": excluded,
+                           "selection_mode": "subset", "selected_ids": sel_ids}
+    if fails:
+        out["stage_failure"] = "; ".join(fails)
+    return out
+
+
 def _venv_python(venv: str) -> str:
     win = os.path.join(venv, "Scripts", "python.exe")
     return win if os.path.exists(win) else os.path.join(venv, "bin", "python")
@@ -212,21 +262,36 @@ class TestRunnerTool(CodedTool):
             ids = list(dict.fromkeys(
                 [s["test_id"] for s in plan.get("selected", [])] + list(plan.get("smoke_set", []))))
 
-            runner = _detect_runner(repo)
             cfg = self._repo_cfg(repo_name)
             env = _scrubbed_env()
 
-            if runner == "pytest":
-                payload = self._run_pytest(repo, cfg, env, ids)
-            elif runner == "jest":
-                payload = self._run_jest(repo, cfg, env, ids)
-            else:
-                payload = {"runner": runner, "command": "", "totals": dict(_EMPTY_TOTALS),
-                           "cases": [], "duration_seconds": 0.0, "timed_out": False,
-                           "stage_failure": f"runner {runner} not supported yet"}
+            # Group selected ids by the runner their extension implies so JS/TS tests never get
+            # fed to pytest (or vice-versa). With no mapped ids (full-suite fallback), fall back to
+            # one repo-global runner. Ids with no recognized extension go to the global runner too.
+            ids_by_runner: Dict[str, List[str]] = {}
+            for tid in ids:
+                r = _runner_for_id(tid)
+                if r:
+                    ids_by_runner.setdefault(r, []).append(tid)
+            leftover = [t for t in ids if _runner_for_id(t) is None]
+            if leftover or not ids_by_runner:
+                ids_by_runner.setdefault(_detect_runner(repo), []).extend(leftover)
+
+            payloads = [self._run(r, repo, cfg, env, rids) for r, rids in ids_by_runner.items()]
+            payload = payloads[0] if len(payloads) == 1 else _merge_payloads(payloads)
             return self._store(sly_data, run_id, payload)
         except Exception as e:
             return f"Error: {e}"
+
+    def _run(self, runner: str, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+             ids: List[str]) -> Dict[str, Any]:
+        if runner == "pytest":
+            return self._run_pytest(repo, cfg, env, ids)
+        if runner == "jest":
+            return self._run_jest(repo, cfg, env, ids)
+        return {"runner": runner, "command": "", "totals": dict(_EMPTY_TOTALS),
+                "cases": [], "duration_seconds": 0.0, "timed_out": False,
+                "stage_failure": f"runner {runner} not supported yet"}
 
     def _run_pytest(self, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
                     ids: List[str]) -> Dict[str, Any]:

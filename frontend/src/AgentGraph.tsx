@@ -54,11 +54,15 @@ function useStatus(events: RunEvent[], state: RunState) {
     const toolStatus = (id: string, stageActive: boolean): Status =>
       terminalDone || (seen.has(id) && !(stageActive && id === activeTool)) ? 'done'
       : id === activeTool && stageActive ? 'active' : 'pending'
-    // Shard reviewers are allocated dynamically: a reviewer the planner never invoked must stay
-    // 'pending' (dim = not used) even after the run finishes, so status is per-node seen, not positional.
+    // Shard reviewers are allocated dynamically. Unused slots stay dim by NOT being rendered
+    // (the caller slices to the allocated count), so every shard that reaches this fn did run —
+    // on terminal-done it's 'done' like every other stage, even when the event stream is empty
+    // (a reopened run replays no events, so `seen` can't be relied on after completion).
     const lastAgent = [...invoked].reverse().find(id => PIPELINE.some(s => s.id === id))
     const shardStatus = (id: string): Status =>
-      seen.has(id) ? (!terminalDone && !failed && id === lastAgent ? 'active' : failed && id === lastAgent ? 'failed' : 'done') : 'pending'
+      terminalDone ? 'done'
+      : seen.has(id) ? (!failed && id === lastAgent ? 'active' : failed && id === lastAgent ? 'failed' : 'done')
+      : 'pending'
     return { activeIdx, stageStatus, toolStatus, shardStatus, frontmanActive: !terminalDone && !failed && activeIdx >= 0 && activeIdx < PIPELINE.length }
   }, [events, state])
 }

@@ -11,7 +11,7 @@
 #                          cloudflared tunnel --url http://localhost:8000)
 #   SENTINEL_TOKEN        an admin API token from the Gateway's API_TOKENS (simulate is admin-only)
 #
-# ponytail: same-repo PRs only. The Gateway clones repo.url and needs BOTH base and head SHAs
+# same-repo PRs only. The Gateway clones repo.url and needs BOTH base and head SHAs
 # reachable there; a fork's head SHA is not in the base repo, so fork PRs are skipped.
 
 name: Sentinel gate

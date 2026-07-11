@@ -4,8 +4,30 @@ import os
 import pytest
 
 from coded_tools.sentinel.test_mapper_tool import TestMapperTool
-from coded_tools.sentinel.test_runner_tool import TestRunnerTool, _detect_runner, _project_dirs
+from coded_tools.sentinel.test_runner_tool import (
+    TestRunnerTool, _detect_runner, _merge_payloads, _project_dirs, _runner_for_id)
 from lib import contracts
+
+
+def test_runner_for_id_routes_by_extension():
+    assert _runner_for_id("tests/test_x.py::test_a") == "pytest"
+    assert _runner_for_id("src/App.test.tsx") == "jest"
+    assert _runner_for_id("a/b.spec.js") == "jest"
+    assert _runner_for_id("Makefile") is None  # unrecognized -> global detection fallback
+
+
+def test_merge_payloads_sums_totals_and_keeps_failures():
+    a = {"runner": "pytest", "command": "pytest x", "totals": {"passed": 4, "failed": 0, "skipped": 0},
+         "cases": [{"test_id": "a", "status": "passed"}], "duration_seconds": 1.0, "timed_out": False,
+         "suite_total": 6, "executed": 4, "excluded": 2, "selected_ids": ["x"]}
+    b = {"runner": "jest", "command": "", "totals": {"passed": 0, "failed": 0, "skipped": 0},
+         "cases": [], "duration_seconds": 0.2, "timed_out": False, "suite_total": 0,
+         "executed": 0, "excluded": 0, "selected_ids": ["y"], "stage_failure": "no jest JSON output"}
+    m = _merge_payloads([a, b])
+    assert m["runner"] == "pytest"  # ran the most tests
+    assert m["totals"]["passed"] == 4 and m["executed"] == 4
+    assert "jest: no jest JSON output" in m["stage_failure"]
+    assert m["selected_ids"] == ["x", "y"]
 
 
 def test_monorepo_detection_auto_scans_at_any_depth(tmp_path):
