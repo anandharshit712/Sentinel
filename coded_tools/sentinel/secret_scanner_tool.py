@@ -48,10 +48,6 @@ _RULES: List[Tuple[str, "re.Pattern", str, str]] = [
      "CWE-798", "Hardcoded credential"),
 ]
 _QUOTED = re.compile(r"['\"]([^'\"]{20,})['\"]")
-# A real high-entropy secret (base64/hex/JWT/token) is compact and structureless: only token chars,
-# no spaces, no ':' (so URLs, log sentences, and prose descriptions — which trip a bare entropy test
-# and caused ~95% of false-positive "criticals" — are rejected before the entropy check).
-_TOKENISH = re.compile(r"^[A-Za-z0-9+/=_.\-]{20,}$")
 
 
 class SecretScannerTool(CodedTool):
@@ -79,8 +75,8 @@ class SecretScannerTool(CodedTool):
                 return cat, cwe, title
         m = _QUOTED.search(content)
         if m:
-            s = m.group(1).strip()
-            if _TOKENISH.match(s) and triage.entropy(s) >= 4.2:  # token-shaped + high entropy
+            # shared gate (lib/triage): token-shaped, not a namespaced identifier, high entropy
+            if triage.looks_like_secret(m.group(1).strip()):
                 return "high_entropy_secret", "CWE-798", "High-entropy secret string"
         return None
 
