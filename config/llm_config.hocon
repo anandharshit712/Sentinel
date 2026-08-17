@@ -3,11 +3,17 @@
     # `fallbacks` are tried in order and fallbacks[0] is the effective primary — the top-level
     # `model_name` override does NOT reorder them (verified in B1: with 70B first the network timed
     # out even with MODEL_NAME set). So the WORKING dev model goes first.
+    # NIM retires models: the previous primary `mistralai/mistral-small-4-119b-2603` went EOL
+    # 2026-07-27 and now returns HTTP 410, which broke every agent call. Re-probe with
+    # `GET /v1/models` + a tool-call request before trusting anything here (2026-08-16).
     "fallbacks": [
-        # Working dev primary: mistral, form B = class:nvidia + RAW NIM id (a bare key with class -> 404). (rule 3)
-        { "class": "nvidia", "model_name": "mistralai/mistral-small-4-119b-2603", "temperature": 0.1 },
-        # Documented primary once access exists — currently times out on the public NIM endpoint.
-        { "class": "nvidia", "model_name": "meta/llama-3.3-70b-instruct", "temperature": 0.1 },
+        # Working dev primary, form B = class:nvidia + RAW NIM id (a bare key with class -> 404). (rule 3)
+        # Verified 2026-08-16: emits structured tool calls, ~1.2-1.9s on a probe request.
+        { "class": "nvidia", "model_name": "nvidia/nemotron-3-super-120b-a12b", "temperature": 0.1 },
+        # Fallback. Also verified tool-calling; latency is more variable (2-18s on probes).
+        { "class": "nvidia", "model_name": "z-ai/glm-5.2", "temperature": 0.1 },
+        # meta/llama-3.3-70b-instruct (the originally documented primary) is deliberately NOT here:
+        # it still times out at 120s on the public NIM endpoint.
         { "model_name": ${?FALLBACK_MODEL_NAME} }     # optional 2nd provider (gpt-4o / claude); ignored if unset
     ],
     "model_name": ${?MODEL_NAME}                       # whole-network override, wins when set

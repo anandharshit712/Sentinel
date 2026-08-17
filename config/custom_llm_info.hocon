@@ -9,7 +9,22 @@
     "nvidia-llama-3.1-8b-instruct": { "use_model_name": "meta/llama-3.1-8b-instruct" },
     "meta/llama-3.1-8b-instruct":   { "class": "nvidia", "max_output_tokens": 8192 },
 
-    # Working stand-in for the locked 70B (which times out on the public endpoint). 119B, fast, tool-calls.
-    "nvidia-mistral-small-4-119b":         { "use_model_name": "mistralai/mistral-small-4-119b-2603" },
-    "mistralai/mistral-small-4-119b-2603": { "class": "nvidia", "max_output_tokens": 8192 }
+    # Working stand-in for the locked 70B (which times out on the public endpoint).
+    # Was mistral-small-4-119b until NIM retired it on 2026-07-27 (HTTP 410 -> every agent call failed).
+    "nvidia-nemotron-3-super":           { "use_model_name": "nvidia/nemotron-3-super-120b-a12b" },
+    "nvidia/nemotron-3-super-120b-a12b": { "class": "nvidia", "max_output_tokens": 8192 },
+
+    # Fallback / per-agent slot: stronger on code reasoning, more variable latency.
+    "nvidia-glm-5.2": { "use_model_name": "z-ai/glm-5.2" },
+    "z-ai/glm-5.2":   { "class": "nvidia", "max_output_tokens": 8192 },
+
+    # Per-agent slots (docs/model-evaluation.md §3 — both scored 9/9 with 0 false positives).
+    # NOTE: max_output_tokens is NOT free headroom to trim. Verbose reasoning models return an
+    # EMPTY finding set when starved of output tokens — no error, just silence. nemotron-3-super
+    # needs >4096; nemotron-3-nano needs >8192. Re-run the bake-off before lowering any of these.
+    "nvidia-nemotron-3-ultra":           { "use_model_name": "nvidia/nemotron-3-ultra-550b-a55b" },
+    "nvidia/nemotron-3-ultra-550b-a55b": { "class": "nvidia", "max_output_tokens": 8192 },
+
+    "nvidia-gpt-oss-20b":  { "use_model_name": "openai/gpt-oss-20b" },
+    "openai/gpt-oss-20b":  { "class": "nvidia", "max_output_tokens": 8192 }
 }
