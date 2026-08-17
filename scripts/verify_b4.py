@@ -12,10 +12,17 @@ Repo names are intentionally not in repo_config so no smoke id points at a non-e
 import json
 import subprocess
 import sys
+import uuid
 import tempfile
 
+from db import dao
 from neuro_san.client.agent_session_factory import AgentSessionFactory
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor
+
+
+def _rid(label: str) -> str:
+    """Stable UUID for a demo label — the DB run_id column is uuid, a bare label raises."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "sentinel/" + label))
 
 
 def _sh(ws, *a):
@@ -56,7 +63,8 @@ def _run(ws, base, head, to_env, host, port):
                         "title": "change", "author": "dev"},
              "target_transition": {"from_env": ("dev" if to_env == "test" else "qa"), "to_env": to_env},
              "requested_by": "tester"}
-    sly = {"run_id": f"b4-{to_env}", "event": event, "repo_workspace": ws}
+    dao.ensure_run(_rid(f"b4-{to_env}"), event)
+    sly = {"run_id": _rid(f"b4-{to_env}"), "event": event, "repo_workspace": ws}
     session = AgentSessionFactory().create_session("http", "sentinel", hostname=host, port=port)
     proc = StreamingInputProcessor(session=session)
     mp = proc.get_message_processor()

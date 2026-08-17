@@ -65,10 +65,18 @@ class DecisionLoggerTool(CodedTool):
             wrapped = contracts.wrap(decision, run_id=str(run_id), produced_by="promotion_gating")
             contracts.validate("decision", wrapped)
             sly_data["decision"] = wrapped
-            dao.insert_decision(str(run_id), decision)
+            # Same rule as report_publisher: a DB failure must not blank the decision the frontman
+            # reports back, or it invents one. Surface the failure, keep the real verdict.
+            persist_error = None
+            try:
+                dao.insert_decision(str(run_id), decision)
+            except Exception as pe:
+                persist_error = str(pe)
+                logger.error("run %s: decision NOT persisted: %s", run_id, pe)
             logger.info("run %s: decision=%s approval_required=%s", run_id,
                         decision["decision"], decision["approval_required"])
-            return {"logged": True, "decision": decision["decision"],
+            return {"logged": persist_error is None, "persist_error": persist_error,
+                    "decision": decision["decision"],
                     "approval_required": decision["approval_required"]}
         except Exception as e:
             return f"Error: {e}"

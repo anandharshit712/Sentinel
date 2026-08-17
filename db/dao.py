@@ -37,6 +37,23 @@ def insert_run(run_id: str, event: dict, source: str, repo: str,
             from_env=from_env, to_env=to_env, state=state))
 
 
+def ensure_run(run_id: str, event: dict, source: str = "manual") -> None:
+    """Insert the parent run row if missing, deriving repo/envs from the event.
+
+    Every per-run table FKs to `runs`, so a headless network run (the verify_* scripts, which
+    bypass the Gateway) can persist nothing until this row exists. Idempotent — reruns reuse
+    the same deterministic run_id.
+    """
+    t = (event.get("target_transition") or {})
+    stmt = pg_insert(models.runs).values(
+        run_id=run_id, event=event, source=source,
+        repo=(event.get("repo") or {}).get("name", "unknown"),
+        from_env=t.get("from_env", "dev"), to_env=t.get("to_env", "test"),
+    ).on_conflict_do_nothing(index_elements=["run_id"])
+    with get_engine().begin() as c:
+        c.execute(stmt)
+
+
 def set_run_state(run_id: str, state: str, finished: bool = False) -> None:
     vals: dict[str, Any] = {"state": state}
     if finished:

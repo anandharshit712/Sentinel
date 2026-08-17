@@ -15,10 +15,17 @@ lands with the auth sensitive flag. Exit 0 = PASS.
 import json
 import subprocess
 import sys
+import uuid
 import tempfile
 
+from db import dao
 from neuro_san.client.agent_session_factory import AgentSessionFactory
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor
+
+
+def _rid(label: str) -> str:
+    """Stable UUID for a demo label — the DB run_id column is uuid, a bare label raises."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "sentinel/" + label))
 
 
 def _sh(ws, *a):
@@ -63,7 +70,8 @@ def main(host="localhost", port=8080):
                         "title": "add token check", "author": "dev"},
              "target_transition": {"from_env": "qa", "to_env": "staging"},
              "requested_by": "tester"}
-    sly = {"run_id": "b1-run", "event": event, "repo_workspace": ws}
+    dao.ensure_run(_rid("b1-run"), event)
+    sly = {"run_id": _rid("b1-run"), "event": event, "repo_workspace": ws}
 
     session = AgentSessionFactory().create_session("http", "sentinel", hostname=host, port=port)
     proc = StreamingInputProcessor(session=session)

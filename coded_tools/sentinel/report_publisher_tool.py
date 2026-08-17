@@ -122,14 +122,23 @@ class ReportPublisherTool(CodedTool):
             wrapped = contracts.wrap(report, run_id=str(run_id), produced_by="review_synthesis")
             contracts.validate("review_report", wrapped)
             sly_data["review_report"] = wrapped
-            dao.save_run_payload("review_reports", str(run_id), wrapped,
-                                 pr_health_score=report["pr_health_score"],
-                                 recommendation=report["recommendation"])
+            # A persistence failure must NOT blank the return value: the frontman has no other
+            # source for these counts, and an "Error: ..." string here makes it invent them.
+            # Report the real numbers, flag the failure loudly instead of swallowing it.
+            persist_error = None
+            try:
+                dao.save_run_payload("review_reports", str(run_id), wrapped,
+                                     pr_health_score=report["pr_health_score"],
+                                     recommendation=report["recommendation"])
+            except Exception as pe:
+                persist_error = str(pe)
+                logger.error("run %s: review_report NOT persisted: %s", run_id, pe)
             simulate = os.environ.get("SIMULATE_CICD", "true").lower() == "true"
             publish = {"action": "none", "detail": "simulated"} if simulate \
                 else {"action": "pr_comment", "detail": "requested via gateway"}
             logger.info("run %s: report_publisher persisted review_report (%s)", run_id, publish["action"])
-            return {"published": True, "persisted": "review_reports", "publish": publish,
+            return {"published": True, "persisted": persist_error is None,
+                    "persist_error": persist_error, "publish": publish,
                     "recommendation": report["recommendation"], "health_score": report["pr_health_score"],
                     "counts": report.get("counts", {})}
         except Exception as e:

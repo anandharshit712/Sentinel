@@ -16,12 +16,19 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 import tempfile
 
+from db import dao
 from neuro_san.client.agent_session_factory import AgentSessionFactory
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor
 
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _rid(label: str) -> str:
+    """Stable UUID for a demo label — the DB run_id column is uuid, a bare label raises."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "sentinel/" + label))
 
 
 def _sh(ws, *a):
@@ -58,7 +65,8 @@ def _run(ws, head, repo_name, to_env, host, port):
                         "title": "full-repo audit", "author": "cli"},
              "target_transition": {"from_env": "dev", "to_env": to_env},
              "requested_by": "tester"}
-    sly = {"run_id": f"audit-{repo_name}-{to_env}", "event": event, "repo_workspace": ws}
+    dao.ensure_run(_rid(f"audit-{repo_name}-{to_env}"), event)
+    sly = {"run_id": _rid(f"audit-{repo_name}-{to_env}"), "event": event, "repo_workspace": ws}
     session = AgentSessionFactory().create_session("http", "sentinel", hostname=host, port=port)
     proc = StreamingInputProcessor(session=session)
     mp = proc.get_message_processor()
