@@ -5,18 +5,16 @@
     # (use_model_name is an alias-to-key, NOT a raw id; pointing it straight at a raw id -> "No llm entry". Spike 0.4.)
 
     # Right-sizing slot: lighter NIM model for code_quality_agent / environment_context_agent
-    # when LIGHT_MODEL_NAME=nvidia-llama-3.1-8b-instruct is set.
-    "nvidia-llama-3.1-8b-instruct": { "use_model_name": "meta/llama-3.1-8b-instruct" },
-    "meta/llama-3.1-8b-instruct":   { "class": "nvidia", "max_output_tokens": 8192 },
+    # when LIGHT_MODEL_NAME=nvidia-gpt-oss-20b is set. Was meta/llama-3.1-8b-instruct until NIM
+    # retired it on 2026-08-26 (HTTP 410); gpt-oss-20b is the live light tier (see below).
 
     # Working stand-in for the locked 70B (which times out on the public endpoint).
     # Was mistral-small-4-119b until NIM retired it on 2026-07-27 (HTTP 410 -> every agent call failed).
     "nvidia-nemotron-3-super":           { "use_model_name": "nvidia/nemotron-3-super-120b-a12b" },
     "nvidia/nemotron-3-super-120b-a12b": { "class": "nvidia", "max_output_tokens": 8192 },
 
-    # Fallback / per-agent slot: stronger on code reasoning, more variable latency.
-    "nvidia-glm-5.2": { "use_model_name": "z-ai/glm-5.2" },
-    "z-ai/glm-5.2":   { "class": "nvidia", "max_output_tokens": 8192 },
+    # z-ai/glm-5.2 was the fallback until NIM retired it on 2026-08-21 (HTTP 410). Removed rather
+    # than left dangling: a dead id here is silent until every agent call fails.
 
     # Per-agent slots (docs/model-evaluation.md §3 — both scored 9/9 with 0 false positives).
     # NOTE: max_output_tokens is NOT free headroom to trim. Verbose reasoning models return an

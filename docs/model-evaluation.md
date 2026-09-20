@@ -121,9 +121,9 @@ writing their contracts, with no error anywhere.
 | Setting | Value |
 |---|---|
 | Primary | `nvidia/nemotron-3-super-120b-a12b` |
-| Fallback | `z-ai/glm-5.2` |
+| Fallback | `openai/gpt-oss-20b` (was `z-ai/glm-5.2` — EOL 2026-08-21, see §7) |
 | Alias | `.env` `MODEL_NAME=nvidia-nemotron-3-super` |
-| Light slot | `meta/llama-3.1-8b-instruct` (probed, alive) |
+| Light slot | `openai/gpt-oss-20b` (was `meta/llama-3.1-8b-instruct` — EOL 2026-08-26) |
 
 Verified live via `scripts/verify_b4.py` — both demo runs pass, decisions correct, contracts
 persisted and DB-confirmed.
@@ -134,9 +134,11 @@ persisted and DB-confirmed.
 
 - **Provider 500s are real.** NIM returned `HTTP 500 Internal server error` under 8-way concurrent
   probing, and again mid-run during a NodeGoat audit — which **failed the whole run**.
-- **The fallback chain does not retry.** `fallbacks` selects a model at session start; it does not
-  catch a mid-run provider error. A transient NIM 500 currently fails a gate check rather than
-  retrying. This is a gap worth closing independently of model choice.
+- **The fallback chain does retry — but only if the fallback is alive.** Superseded by §7: with a
+  live fallback configured, three consecutive runs survived two mid-run `HTTP 500`s and all three
+  produced a decision. With the fallback dead (410), the same 500 killed the run. The earlier
+  reading here — "selects at session start, does not catch a mid-run error" — was drawn from runs
+  whose fallback was already EOL, so nothing could catch anything.
 - `nemotron-3-super` has thrown a 500 twice; `glm-5.2` has not thrown one in any run. n is small —
   this is an observation, not yet a conclusion.
 - Concurrency aggravates it. The security-review fan-out runs **sequentially** today (deferred per
@@ -305,11 +307,56 @@ answer turned out to be "the models were never the problem".
 
 ---
 
-## 8. Reproduction
+---
+
+## 8. Re-probe 2026-09-20 — the fallback had died too
+
+Found while running the dashboard end-to-end: **0 of 3 happy-path runs produced a decision**, each
+failing with `network finished without a promotion decision`. The Neuro-SAN log showed repeated
+`HTTP 500 Internal server error` from NIM, not a logic fault.
+
+### What the probe found
+
+| Model | Result |
+|---|---|
+| `nvidia/nemotron-3-super-120b-a12b` (primary) | alive, tool calls OK, ~0.7–1.2s — but **1 of 12 requests returned HTTP 500** |
+| `z-ai/glm-5.2` (fallback) | **410 — EOL 2026-08-21** |
+| `meta/llama-3.1-8b-instruct` (light slot) | **410 — EOL 2026-08-26** |
+| `openai/gpt-oss-20b` | alive, tool calls OK, 1.0–4.2s, 3/3 |
+| `nvidia/nemotron-3-ultra-550b-a55b` | alive, tool calls OK, but 19–29s per call — too slow for a 12-step chain |
+
+Three of the four model ids in `config/` were dead or dying. The primary alone is not enough: at a
+~8% per-call 500 rate, a run making ~15 LLM calls fails more often than it succeeds.
+
+### Fix and evidence
+
+Fallback → `openai/gpt-oss-20b`; light slot → same; dead `glm-5.2` / `llama-3.1-8b` entries removed
+from `custom_llm_info.hocon` rather than left dangling. Config only, no code.
+
+**Before:** 0/3 runs produced a decision. **After:** 3/3 → `promote`, and the Neuro-SAN log records
+**two `HTTP 500`s during those same three runs** — absorbed, not fatal. That is the §5 correction:
+recovery works when there is something live to fall back to.
+
+Run times rose to 167s / 221s / 342s (previously ~90s), consistent with some steps being served by
+the fallback after a primary error.
+
+### Operational lesson
+
+A dead *fallback* is invisible: nothing fails until the primary has its first bad minute, and then
+everything fails at once. **Probe every id in `config/`, not just the primary** — the entries that
+look like spares are the ones that rot unnoticed. `python scripts/probe_models.py` (§9) does this.
+
+
+---
+
+## 9. Reproduction
 
 ```bash
 # catalog
 curl -s https://integrate.api.nvidia.com/v1/models -H "Authorization: Bearer $NVIDIA_API_KEY"
+
+# are the ids in config/ actually callable? (tool-call probe, not just a listing)
+PYTHONPATH=. python scripts/probe_models.py
 
 # live pipeline check (both demo runs, DB-confirmed)
 PYTHONPATH=. python -u scripts/verify_b4.py

@@ -56,7 +56,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
       {review_report && <ReviewReportCard r={review_report} />}
       {test_results && <TestResultsCard r={test_results} />}
       {test_plan && <TestPlanCard r={test_plan} />}
-      {!decision && <p className="text-sm text-[var(--ink-dim)]">No decision yet — pipeline running.</p>}
+      {!decision && state !== 'failed' && <p className="text-sm text-[var(--ink-dim)]">No decision yet — pipeline running.</p>}
     </div>
   )
 }

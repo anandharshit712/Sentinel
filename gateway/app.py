@@ -267,8 +267,15 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         # a silent empty run. Fail it (re-runnable via RERUN) instead of showing a green DONE
         # with no report/decision. ponytail: no auto-retry; RERUN covers the occasional flake.
         if not decision:
-            raise RuntimeError("network finished without a promotion decision — the frontman did "
-                               "not run the pipeline (0 agents invoked). Re-run this event.")
+            # Say how far it actually got: "0 agents invoked" was a guess, and it is wrong for the
+            # common case — the chain runs most of the way, then a provider error (NIM 500) or
+            # frontman drift drops the deterministic tail. Naming the reached contracts points at
+            # which step died instead of misdirecting to the frontman.
+            reached = [k for k in ("change_profile", "review_report", "test_plan", "test_results",
+                                   "env_context", "risk_score") if sly.get(k)]
+            raise RuntimeError("network finished without a promotion decision — the pipeline "
+                               f"stopped after {', '.join(reached) if reached else 'no steps'}. "
+                               "Re-run this event.")
         dao.set_run_state(run_id, "done", finished=True)
         bus.publish(run_id, {"kind": "state_change", "state": "done",
                              "decision": decision, "structure": structure})

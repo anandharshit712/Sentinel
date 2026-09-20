@@ -10,8 +10,10 @@
         # Working dev primary, form B = class:nvidia + RAW NIM id (a bare key with class -> 404). (rule 3)
         # Verified 2026-08-16: emits structured tool calls, ~1.2-1.9s on a probe request.
         { "class": "nvidia", "model_name": "nvidia/nemotron-3-super-120b-a12b", "temperature": 0.1 },
-        # Fallback. Also verified tool-calling; latency is more variable (2-18s on probes).
-        { "class": "nvidia", "model_name": "z-ai/glm-5.2", "temperature": 0.1 },
+        # Fallback. Was z-ai/glm-5.2 until NIM retired it on 2026-08-21 (HTTP 410), leaving the
+        # network with NO live fallback. gpt-oss-20b scored 9/9 recall / 0 FPs in the bake-off
+        # (docs/model-evaluation.md §3) and probes 3/3 with tool calls at ~1-4s (2026-09-20).
+        { "class": "nvidia", "model_name": "openai/gpt-oss-20b", "temperature": 0.1 },
         # meta/llama-3.3-70b-instruct (the originally documented primary) is deliberately NOT here:
         # it still times out at 120s on the public NIM endpoint.
         { "model_name": ${?FALLBACK_MODEL_NAME} }     # optional 2nd provider (gpt-4o / claude); ignored if unset
