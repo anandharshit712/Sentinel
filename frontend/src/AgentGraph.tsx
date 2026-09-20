@@ -26,12 +26,12 @@ const PIPELINE: Node[] = [
   { id: 'report_publisher', label: 'Report' },
   { id: 'test_selection_agent', label: 'Test Select', tools: [{ id: 'test_mapper', label: 'map' }] },
   { id: 'test_runner', label: 'Test Run' },
-  { id: 'environment_context_agent', label: 'Env', tools: [
-    { id: 'incident_history', label: 'incidents' }, { id: 'deploy_window', label: 'window' }] },
-  { id: 'risk_scoring_agent', label: 'Risk', tools: [{ id: 'risk_calculator', label: 'calc' }] },
-  { id: 'promotion_gating_agent', label: 'Gate', tools: [
-    { id: 'trust_ladder', label: 'ladder' }, { id: 'decision_logger', label: 'log' },
-    { id: 'cicd_action', label: 'cicd' }, { id: 'notification', label: 'notify' }] },
+  // One deterministic step, not three agents: env context, risk, ladder, decision and the
+  // resulting action all run inside finalize_run (08 §6 — the LLM tail was costing decisions).
+  { id: 'finalize_run', label: 'Finalize', tools: [
+    { id: 'incident_history', label: 'incidents' }, { id: 'deploy_window', label: 'window' },
+    { id: 'risk_calculator', label: 'risk' }, { id: 'trust_ladder', label: 'ladder' },
+    { id: 'decision_logger', label: 'log' }, { id: 'cicd_action', label: 'cicd' }] },
 ]
 
 type Status = 'pending' | 'active' | 'done' | 'failed'

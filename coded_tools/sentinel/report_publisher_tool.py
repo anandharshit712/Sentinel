@@ -60,30 +60,41 @@ def _coverage(sly_data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _floor_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Deterministic detection floor: re-scan the whole diff for secrets + dangerous sinks IN CODE.
+    """Deterministic detection floor: re-scan the whole diff IN CODE, for every review dimension.
 
-    Guarantees the critical/high deterministic findings are in the report even if a security
-    reviewer ran late or out of order on a long chain (frontman ordering is not guaranteed — §14).
-    The LLM reviewers still add their own judged findings; _dedup collapses the overlap.
+    Guarantees the deterministic findings are in the report even if a reviewer ran late or out of
+    order on a long chain (frontman ordering is not guaranteed — §14). Each scanner is independent,
+    so one that raises cannot take the others' findings down with it. The LLM reviewers still add
+    their own judged findings; _dedup collapses the overlap.
     """
     profile = sly_data.get("change_profile") or sly_data.get("change_profile_wip")
     if not profile:
         return []
-    try:
-        from coded_tools.sentinel.secret_scanner_tool import SecretScannerTool
-        # no review_plan/shard -> legacy whole-diff scan; does not touch sly_data
-        out = SecretScannerTool().invoke({}, {"run_id": sly_data.get("run_id"),
-                                              "change_profile": profile,
-                                              "event": sly_data.get("event")})
-        return out.get("findings", []) if isinstance(out, dict) else []
-    except Exception:
-        return []
+    from coded_tools.sentinel.license_scanner_tool import LicenseScannerTool
+    from coded_tools.sentinel.performance_scanner_tool import PerformanceScannerTool
+    from coded_tools.sentinel.secret_scanner_tool import SecretScannerTool
+
+    # no review_plan/shard -> legacy whole-diff scan; none of these touch sly_data
+    scan_input = {"run_id": sly_data.get("run_id"), "change_profile": profile,
+                  "event": sly_data.get("event"), "repo_workspace": sly_data.get("repo_workspace")}
+    out: List[Dict[str, Any]] = []
+    for tool in (SecretScannerTool(), PerformanceScannerTool(), LicenseScannerTool()):
+        try:
+            res = tool.invoke({}, dict(scan_input))
+            if isinstance(res, dict):
+                out.extend(res.get("findings", []))
+        except Exception:   # a floor that cannot run must not blank the ones that can
+            continue
+    return out
 
 
 def _synthesize(sly_data: Dict[str, Any]) -> Dict[str, Any]:
     sec = [f for k in _SEC_KEYS for f in ((sly_data.get(k) or {}).get("findings") or [])]
-    qual = (sly_data.get("quality_findings") or {}).get("findings", []) or []
-    merged = _dedup(sec + _floor_findings(sly_data) + qual)
+    # Phase 2 review cluster (08): quality, performance and compliance reviewers each write their
+    # own findings contract; all four dimensions merge into the one report.
+    other = [f for k in ("quality_findings", "performance_findings", "compliance_findings")
+             for f in ((sly_data.get(k) or {}).get("findings") or [])]
+    merged = _dedup(sec + _floor_findings(sly_data) + other)
     counts = {s: sum(1 for f in merged if f["severity"] == s) for s in _SEV_DEDUCT}
     score = max(0, 100 - sum(_SEV_DEDUCT[f["severity"]] for f in merged))
     if counts["critical"]:
@@ -93,10 +104,14 @@ def _synthesize(sly_data: Dict[str, Any]) -> Dict[str, Any]:
     else:
         rec = "approve"
     worst = merged[0]["title"] if merged else "no issues found"
+    tally = (f"{len(merged)} finding(s): {counts['critical']} critical, {counts['high']} high, "
+             f"{counts['medium']} medium, {counts['low']} low. Worst: {worst}.")
+    # The senior narrative covers SECURITY only. Since the report now merges four dimensions (08),
+    # letting it stand alone makes the summary contradict the list below it — it was observed
+    # claiming "no high, medium or low findings" above a list of two highs and a medium. The
+    # counted tally always follows it, so the prose can never overrule the arithmetic.
     senior = (sly_data.get("senior_summary") or {}).get("summary")
-    summary = senior or (
-        f"{len(merged)} finding(s): {counts['critical']} critical, {counts['high']} high, "
-        f"{counts['medium']} medium, {counts['low']} low. Worst: {worst}.")
+    summary = f"{senior} Across all review dimensions — {tally}" if senior else tally
 
     plan = sly_data.get("review_plan") or {}
     report = {"executive_summary": summary, "findings": merged, "pr_health_score": score,

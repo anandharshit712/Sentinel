@@ -13,6 +13,7 @@ Built on **Neuro-SAN** as the sole multi-agent orchestrator. Source problem stat
 | 05  | [Architecture Diagrams](05-architecture-diagram.md) | Six views: landscape, containers, agent network topology, cross-stage signal flow, production K8s, hackathon compose.                                                                                          |
 | 06  | [Frontend Design](06-frontend-design.md)            | Decision Dashboard SPA: stack (React 19 + Vite 7 + TS + Tailwind v4 + React Router; plain fetch + native EventSource), routes, component hierarchy, data/SSE layer, design system, auth gating — derives from 01 §14 and 04 §9.                                     |
 | 07  | [Implementation Plan](07-implementation-plan.md)    | Contract-first, component-based build plan: tracer bullet, tracks A–D, milestones M0–M5, 3-day solo schedule, risk register.                                                                                   |
+| 08  | [Post-Hackathon Plan](08-post-hackathon-plan.md)    | **Outside the hackathon set.** Phase 2 of the evolution vision (performance + compliance reviewers). 01–07 stay frozen at hackathon scope; this document and its successors carry the post-hackathon track.                        |
 
-Reading order: 01 → 05 (visual overview) → 03 → 02 → 04 → 06.
+Reading order: 01 → 05 (visual overview) → 03 → 02 → 04 → 06. Documents 01–07 describe the delivered hackathon system; 08 onwards is the post-hackathon track.
 Diagrams are Mermaid — render natively on GitHub and in VS Code (Markdown Preview Mermaid extension).

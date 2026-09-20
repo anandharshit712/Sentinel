@@ -368,6 +368,10 @@ CONTRACTS: dict[str, dict] = {
     "change_profile": _CHANGE_PROFILE,
     "security_findings": _FINDINGS,   # 4.3 — same schema, several sly_data keys
     "quality_findings": _FINDINGS,
+    # Phase 2 review cluster (08 §4): same _FINDINGS shape so report_publisher, the risk formula
+    # and the SPA need no new vocabulary — only a new sly_data key each.
+    "performance_findings": _FINDINGS,
+    "compliance_findings": _FINDINGS,
     # adaptive security fan-out: one findings contract per shard reviewer (all _FINDINGS aliases)
     "security_findings_shard_1": _FINDINGS,
     "security_findings_shard_2": _FINDINGS,
@@ -459,6 +463,19 @@ _SAMPLE_PAYLOADS: dict[str, dict] = {
                       "file": "app/api.py", "line_start": 1, "line_end": 40,
                       "title": "High cyclomatic complexity", "explanation": "…", "fix_suggestion": "split", "source": "llm"}],
         "quality_score": 82,
+    },
+    "performance_findings": {
+        "findings": [{"id": "PERF-001", "category": "n_plus_one", "severity": "medium",
+                      "file": "app/orders.py", "line_start": 42, "line_end": 48,
+                      "title": "Database query inside a loop", "explanation": "…",
+                      "fix_suggestion": "batch the query outside the loop", "source": "tool"}],
+    },
+    "compliance_findings": {
+        "findings": [{"id": "COMP-001", "category": "license_conflict", "severity": "high",
+                      "file": "requirements.txt", "line_start": 3, "line_end": 3,
+                      "title": "GPL-3.0 dependency in a permissive project", "explanation": "…",
+                      "fix_suggestion": "replace with a permissively licensed equivalent",
+                      "source": "tool"}],
     },
     "review_plan": {
         "mode": "audit",
