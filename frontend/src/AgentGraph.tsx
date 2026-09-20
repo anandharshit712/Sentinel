@@ -23,6 +23,10 @@ const PIPELINE: Node[] = [
     { id: 'review_digest', label: 'digest' }, { id: 'dependency_cve', label: 'cve' }, { id: 'contract_store', label: 'store' }] },
   { id: 'code_quality_agent', label: 'Quality', tools: [
     { id: 'complexity_metrics', label: 'complexity' }, { id: 'contract_store', label: 'store' }] },
+  { id: 'performance_review_agent', label: 'Perf', tools: [
+    { id: 'performance_scanner', label: 'scan' }, { id: 'contract_store', label: 'store' }] },
+  { id: 'compliance_review_agent', label: 'Compliance', tools: [
+    { id: 'license_scanner', label: 'licence' }, { id: 'contract_store', label: 'store' }] },
   { id: 'report_publisher', label: 'Report' },
   { id: 'test_selection_agent', label: 'Test Select', tools: [{ id: 'test_mapper', label: 'map' }] },
   { id: 'test_runner', label: 'Test Run' },
