@@ -161,17 +161,41 @@ coded tools in a fixed order and copied results forward, at the cost of a turn e
   network offline with a 404 rather than a startup error. The seven tail tools had to be removed
   from `registries/sentinel.hocon`, not merely unhooked.
 
-## 7. Exit criteria
+## 7. Exit criteria — met 2026-09-21
 
-- [ ] Both agents write their contracts on a live run; `report_publisher` merges four sources.
-- [ ] Planted N+1, blocking-async call, GPL dependency and PII-in-log all appear in the report with
-      the right category and severity, and at least one is a floor (`source: tool`) finding.
-- [ ] `verify_b4.py` still passes 3/3 — no regression on the existing demo runs.
-- [ ] `verify_p2.py` passes 3/3.
-- [ ] Unit tests green (`pytest -q`), including the new rule tables.
-- [ ] Decision rate measured before and after, and recorded here.
+- [x] Both agents write their contracts on a live run; `report_publisher` merges four sources.
+      *Caveat worth keeping: `performance_findings` was written in **2 of 3** trials. In the third
+      the agent produced its summary without calling `contract_store`, and the deterministic floor
+      carried the finding into the report anyway. That is the floor doing its job, and it is the
+      reason the floor exists — but it means "the agent wrote its contract" is not yet a
+      guarantee, only the common case.*
+- [x] Planted findings appear with the right category and severity, at least one from the floor
+      (`source: tool`). The fixture plants one per dimension — hardcoded AWS key (security, floor,
+      critical), `db.query()` in a loop (performance, floor, medium), email in a log line
+      (compliance, floor, high) — and live runs add LLM findings on top (missing caching,
+      unbounded accumulation, missing input validation).
+      *The original plan named a "GPL dependency"; the fixture uses a copyleft notice and a
+      manifest licence field instead, because dependency licences are not resolved (§3 P2.3).*
+- [x] `verify_b4.py` still passes — no regression. Its insecure baseline moved **85 → 100** now
+      that LLM findings reach the report on top of the floor; happy path unchanged at risk 0.
+- [x] `verify_p2.py` 3/3, decision rate 3/3.
+- [x] Unit tests green: **102** (was 85), including the rule tables' own self-checks.
+- [x] Decision rate measured before and after — the table in §6.
 
----
+### Delta from the frozen hackathon docs
+
+Documents 01–07 describe the system as delivered for the hackathon and stay frozen there
+(repo rule 1). The network has since changed, so [04 §5](04-lld.md)'s tool and agent listing no
+longer matches `registries/sentinel.hocon`. The differences, recorded here rather than by editing
+04:
+
+| 04 §5 says | Now |
+|---|---|
+| 19 coded tools | **22 implemented, 15 declared in the registry** — added `performance_scanner`, `license_scanner`, `finalize_run`; the 7 tail tools still exist and still run, but are called in process by `finalize_run` rather than declared (a declared-but-unreachable tool takes the whole network offline — §6) |
+| `environment_context_agent`, `risk_scoring_agent`, `promotion_gating_agent` | folded into `finalize_run` (§6) |
+| review cluster = security fan-out + quality | + `performance_review_agent`, `compliance_review_agent` |
+| frontman chain = 12 steps | 12 steps, different composition (two more reviewers, three fewer tail agents) |
+| risk score may be raised by `llm_escalation` | deterministic `risk-v1` only (§6) |
 
 ## 8. After this
 

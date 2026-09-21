@@ -17,12 +17,12 @@ Cognizant Internal Hackathon project. One Neuro-SAN agent network acts as a conn
 
 ## The Solution (at a glance)
 
-- **Multi-agent first-pass review** — specialist Security and Code Quality agents return a severity-ranked, deduplicated review report in seconds.
+- **Multi-agent first-pass review** — specialist Security (adaptive 1–4 way fan-out + senior summarizer), Code Quality, Performance and Compliance agents return one severity-ranked, deduplicated review report in seconds. Each dimension has a deterministic floor: coded rules that fire regardless of what the LLM says, so a reviewer that drifts cannot produce a falsely clean report.
 - **Smart test selection** — deterministic diff + dependency-graph + test-mapping selects the relevant subset plus an always-on smoke set; the project's **own** test runner executes it (language-agnostic via manifest detection).
 - **Explainable promotion gating** — review findings + test results + change profile + environment context converge into one deterministic risk score (`risk-v1`); a graduated **trust ladder** yields _Promote / Hold / Escalate_ with a full reasoning trail. Staging→production **never** auto-promotes.
 - **Design spine:** _LLM reasons, code decides_ — scoring, policy and test execution are deterministic coded tools; LLM agents interpret, explain, and may only **raise** risk.
 
-Primary LLM provider: **NVIDIA NIM** (`nvidia-llama-3.3-70b-instruct`) with provider-agnostic fallbacks; self-hosted NIM option keeps code in-company.
+Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallback `openai/gpt-oss-20b`) with provider-agnostic fallbacks; self-hosted NIM option keeps code in-company. NIM retires models without notice — `python scripts/probe_models.py` checks every id in `config/` with a real tool-call request before you trust it.
 
 ## Repository Layout
 
@@ -83,7 +83,9 @@ flowchart LR
     GW -->|"gate status / promote / comment"| CI
 ```
 
-Pipeline (frontman + up to 12 agents, one tool call at a time): `delivery_coordinator` (frontman) → `change_analysis` → `review_planner` (CodedTool) → `security_reviewer_1..4` → `senior_security` → `code_quality` → `report_publisher` (CodedTool) → `test_selection` → `test_runner` (CodedTool) → `environment_context` → `risk_scoring` → `promotion_gating`.
+Pipeline (frontman + up to 11 agents, one tool call at a time): `delivery_coordinator` (frontman) → `change_analysis` → `review_planner` (CodedTool) → `security_reviewer_1..4` → `senior_security` → `code_quality` → `performance_review` → `compliance_review` → `report_publisher` (CodedTool) → `test_selection` → `test_runner` (CodedTool) → `finalize_run` (CodedTool).
+
+The tail — environment context, risk score, trust ladder, decision, CI/CD action — is one deterministic call rather than three LLM agents. Those agents decided nothing (each ran a fixed tool sequence) and cost a conversation turn each, which measurably cost decisions on a long chain: see [08 §6](docs/solution/08-post-hackathon-plan.md).
 
 ## Demo Scenarios (hackathon MVP)
 
@@ -161,10 +163,11 @@ Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gat
 ## Status
 
 - ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md)) + full design ([docs/solution/](docs/solution/))
-- ✅ **Implementation** (host-native): 19 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ✅ **Implementation** (host-native): 22 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
 - ✅ **Audit mode + adaptive security fan-out**: `scripts/run_repo.py --full` runs the whole pipeline over any public repo; `review_planner` sizes 1–4 parallel `security_reviewer_*` by hotspot volume; `report_publisher` reports honest deep-review coverage (`scripts/verify_audit.py`).
 - ✅ GitHub Action gate for real repos ([`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml)) — PRs post to `/api/v1/simulate`, check fails unless `promote`.
-- ⬜ Phase 6 hardening + in-browser rehearsal.
+- ✅ **Verified in a browser**: every screen driven through a real Chromium — login gate, runs list, live SSE timeline and agent graph, approvals (mandatory reject comment), compare, audit, viewer role gating.
+- ✅ **Post-hackathon Phase 2** — Performance + Compliance reviewers, four-dimension merged report, deterministic tail ([docs/solution/08-post-hackathon-plan.md](docs/solution/08-post-hackathon-plan.md)). Documents 01–07 stay frozen at hackathon scope; 08 records what changed since.
 
 ## Framework Reference
 
