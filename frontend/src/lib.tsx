@@ -144,10 +144,10 @@ export const BAND_HEX: Record<Band, string> = {
 
 export const BandChip = ({ band }: { band?: Band | null }) =>
   band ? <span className={`${CHIP} ${bandCls[band]}`}><i className={`${DOT} ${dotColor[band]}`} />{band}</span>
-       : <span className="text-[var(--ink-dim)] text-xs">—</span>
+       : <span className="text-(--ink-dim) text-xs">—</span>
 export const DecisionChip = ({ d }: { d?: Decision | null }) =>
   d ? <span className={`${CHIP} ${decisionCls[d]}`}><i className={`${DOT} ${dotColor[d]}`} />{d}</span>
-    : <span className="text-[var(--ink-dim)] text-xs">—</span>
+    : <span className="text-(--ink-dim) text-xs">—</span>
 export const SeverityChip = ({ s }: { s: Severity }) => <span className={`${CHIP} ${sevCls[s]}`}>{s}</span>
 export const StateChip = ({ s }: { s: RunState }) => {
   const live = s !== 'done' && s !== 'failed'
@@ -159,19 +159,19 @@ export const StateChip = ({ s }: { s: RunState }) => {
 }
 
 export const RelativeTime = ({ t }: { t?: string | null }) =>
-  <span title={t || ''} className="text-[var(--ink-dim)] text-xs">{t ? new Date(t).toLocaleString() : '—'}</span>
+  <span title={t || ''} className="text-(--ink-dim) text-xs">{t ? new Date(t).toLocaleString() : '—'}</span>
 
 // ---------------------------------------------------------------- panel with corner ticks
 export function Card({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
-  const tick = 'pointer-events-none absolute h-2 w-2 border-[var(--signal)]/40'
+  const tick = 'pointer-events-none absolute h-2 w-2 border-(--signal)/40'
   return (
-    <section className="relative rounded-md border border-[var(--line)] bg-[var(--panel)] p-4">
+    <section className="relative rounded-md border border-(--line) bg-(--panel) p-4">
       <span className={`${tick} left-0 top-0 border-l border-t`} />
       <span className={`${tick} right-0 top-0 border-r border-t`} />
       <span className={`${tick} left-0 bottom-0 border-l border-b`} />
       <span className={`${tick} right-0 bottom-0 border-r border-b`} />
-      <header className="mb-3 flex items-center justify-between border-b border-[var(--line-soft)] pb-2">
-        <h2 className="tt text-[11px] font-semibold text-[var(--ink-dim)]">{title}</h2>
+      <header className="mb-3 flex items-center justify-between border-b border-(--line-soft) pb-2">
+        <h2 className="tt text-[11px] font-semibold text-(--ink-dim)">{title}</h2>
         {right}
       </header>
       {children}
@@ -192,7 +192,7 @@ export function ScoreDial({ score, band }: { score: number; band: Band }) {
               style={{ filter: `drop-shadow(0 0 6px ${hex})`, transition: 'stroke-dashoffset .8s ease' }} />
       <line x1="75" y1="15" x2="75" y2="27" stroke="#e5e7eb" strokeWidth="2" strokeOpacity="0.5"
             transform="rotate(270 75 75)" />
-      <text x="75" y="72" textAnchor="middle" className="fill-[var(--ink-hi)]" fontSize="34" fontWeight="700"
+      <text x="75" y="72" textAnchor="middle" className="fill-(--ink-hi)" fontSize="34" fontWeight="700"
             fontFamily="ui-monospace, monospace">{score}</text>
       <text x="75" y="94" textAnchor="middle" fill={hex} fontSize="12" fontWeight="700"
             letterSpacing="2" style={{ textTransform: 'uppercase' }}>{band}</text>
@@ -201,7 +201,7 @@ export function ScoreDial({ score, band }: { score: number; band: Band }) {
 }
 
 export function HealthGauge({ value }: { value?: number }) {
-  if (value == null) return <span className="text-[var(--ink-dim)]">—</span>
+  if (value == null) return <span className="text-(--ink-dim)">—</span>
   const c = value >= 75 ? '#34d399' : value >= 50 ? '#fbbf24' : '#f87171'
   return (
     <div className="flex items-center gap-2">

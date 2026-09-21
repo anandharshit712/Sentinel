@@ -1,0 +1,28 @@
+{
+  // The project's real interpreter is the venv — the global one has none of the dependencies
+  // (neuro_san, fastapi, sqlalchemy...), so without this every coded tool shows unresolved
+  // imports and the Problems panel fills with errors that do not exist at runtime.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  // `from lib import ...` / `from db import ...` are top-level packages resolved from the repo
+  // root (PYTHONPATH=. is how every entrypoint runs — see scripts/run_server.py).
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+  // neuro-san-studio is a read-only upstream clone kept for framework reference (CLAUDE.md). It
+  // is a separate project with its own dependencies; analysing its 333 files reports problems
+  // about code this repo neither owns nor runs.
+  "python.analysis.exclude": [
+    "${workspaceFolder}/neuro-san-studio/**",
+    "${workspaceFolder}/.venv/**",
+    "**/node_modules/**"
+  ],
+  "search.exclude": {
+    "neuro-san-studio": true,
+    ".venv": true,
+    "frontend/node_modules": true,
+    "samples/node-catalog-service/node_modules": true
+  },
+
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"]
+}

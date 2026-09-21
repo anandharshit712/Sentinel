@@ -19,7 +19,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   const { events, liveState } = useRunEvents(id, live, refetch)
   const nav = useNavigate()
 
-  if (loading && !data) return <div className="p-6 text-[var(--ink-dim)]">Loading {id}…</div>
+  if (loading && !data) return <div className="p-6 text-(--ink-dim)">Loading {id}…</div>
   if (error) return <div className="p-6 text-red-400">Error: {error}</div>
   if (!data) return null
   const { run, review_report, test_plan, test_results, risk_score, review_plan, decision, error: failReason } = data
@@ -30,9 +30,9 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   return (
     <div className="space-y-4">
       <header className="flex flex-wrap items-center gap-3">
-        {full && <Link to="/" className="text-xs text-[var(--ink-dim)] hover:text-[var(--signal)]">← runs</Link>}
-        <h1 className="text-lg font-bold tracking-wide text-[var(--ink-hi)]">{run.repo}</h1>
-        <span className="text-[var(--ink-dim)] text-sm">{run.from_env} <span className="text-[var(--signal)]">→</span> {run.to_env}</span>
+        {full && <Link to="/" className="text-xs text-(--ink-dim) hover:text-(--signal)">← runs</Link>}
+        <h1 className="text-lg font-bold tracking-wide text-(--ink-hi)">{run.repo}</h1>
+        <span className="text-(--ink-dim) text-sm">{run.from_env} <span className="text-(--signal)">→</span> {run.to_env}</span>
         <StateChip s={state} />
         <BandChip band={risk_score?.band ?? run.band} />
         <DecisionChip d={dec} />
@@ -43,7 +43,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
                 className="rounded-sm border border-red-500/40 px-3 py-1 text-xs uppercase tracking-wide text-red-300 hover:border-red-400 hover:bg-red-500/10">Stop</button>
             )}
             <button onClick={() => rerun(id).then(r => nav(`/runs/${r.run_id}`))}
-              className="rounded-sm border border-[var(--line)] px-3 py-1 text-xs uppercase tracking-wide text-[var(--ink-dim)] hover:border-[var(--signal)] hover:text-[var(--signal)]">Rerun</button>
+              className="rounded-sm border border-(--line) px-3 py-1 text-xs uppercase tracking-wide text-(--ink-dim) hover:border-(--signal) hover:text-(--signal)">Rerun</button>
           </RoleGate>
         </span>
       </header>
@@ -56,7 +56,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
       {review_report && <ReviewReportCard r={review_report} />}
       {test_results && <TestResultsCard r={test_results} />}
       {test_plan && <TestPlanCard r={test_plan} />}
-      {!decision && state !== 'failed' && <p className="text-sm text-[var(--ink-dim)]">No decision yet — pipeline running.</p>}
+      {!decision && state !== 'failed' && <p className="text-sm text-(--ink-dim)">No decision yet — pipeline running.</p>}
     </div>
   )
 }
@@ -70,14 +70,14 @@ function FailureCard({ error, events }: { error?: string | null; events: any[] }
   return (
     <Card title="Run Failed" right={<span className="rounded-sm border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-300">no decision</span>}>
       <p className="text-sm text-red-300">The pipeline stopped before producing a decision.</p>
-      {isClone && <p className="mt-1 text-[11px] text-[var(--ink-dim)]">Repository clone failed — check the URL is public and both SHAs are reachable on the default branch. On Windows, a deeply-nested repo can exceed the 260-char path limit.</p>}
+      {isClone && <p className="mt-1 text-[11px] text-(--ink-dim)">Repository clone failed — check the URL is public and both SHAs are reachable on the default branch. On Windows, a deeply-nested repo can exceed the 260-char path limit.</p>}
       {reason ? (
         <details className="mt-3">
-          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-[var(--ink-dim)] hover:text-[var(--signal)]">why it failed</summary>
+          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-(--ink-dim) hover:text-(--signal)">why it failed</summary>
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-sm border border-red-500/30 bg-red-500/5 p-2 text-[11px] text-red-200">{reason}</pre>
         </details>
       ) : (
-        <p className="mt-2 text-[11px] text-[var(--ink-dim)]">No error detail recorded.</p>
+        <p className="mt-2 text-[11px] text-(--ink-dim)">No error detail recorded.</p>
       )}
     </Card>
   )
@@ -88,7 +88,7 @@ function NetworkCard({ state, events, decision, shardCount }:
   const cur = stageRank(state)
   return (
     <Card title="Agent Network · Live"
-          right={<span className="text-[10px] uppercase tracking-widest text-[var(--ink-dim)]">{events.length} signals</span>}>
+          right={<span className="text-[10px] uppercase tracking-widest text-(--ink-dim)">{events.length} signals</span>}>
       {/* linear stage strip */}
       <ol className="mb-4 flex flex-wrap items-center gap-1.5">
         {STAGES.map((s, i) => {
@@ -97,8 +97,8 @@ function NetworkCard({ state, events, decision, shardCount }:
           return (
             <li key={s} className={`rounded-sm px-2 py-0.5 text-[10px] uppercase tracking-wide border ${
               done ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300'
-              : active ? 'border-[var(--signal)] bg-[var(--signal-dim)] text-[var(--ink-hi)]'
-              : 'border-[var(--line)] text-[var(--ink-dim)]'}`}
+              : active ? 'border-(--signal) bg-(--signal-dim) text-(--ink-hi)'
+              : 'border-(--line) text-(--ink-dim)'}`}
               style={active ? { animation: 'blink 1.2s steps(2) infinite' } : undefined}>{s}</li>
           )
         })}
@@ -109,10 +109,10 @@ function NetworkCard({ state, events, decision, shardCount }:
 
       {events.length > 0 && (
         <details className="mt-3">
-          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-[var(--ink-dim)] hover:text-[var(--signal)]">signal log</summary>
-          <ul aria-live="polite" className="mt-2 max-h-40 space-y-0.5 overflow-auto text-[11px] text-[var(--ink-dim)]">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-(--ink-dim) hover:text-(--signal)">signal log</summary>
+          <ul aria-live="polite" className="mt-2 max-h-40 space-y-0.5 overflow-auto text-[11px] text-(--ink-dim)">
             {events.filter(e => e.text).map((e, i) => (
-              <li key={i}><span className="text-[var(--signal)]">›</span> {e.text}</li>
+              <li key={i}><span className="text-(--signal)">›</span> {e.text}</li>
             ))}
           </ul>
         </details>
@@ -128,25 +128,25 @@ function DecisionCard({ d, prodGate, runId, onResolved }:
   return (
     <Card title="Decision" right={<DecisionChip d={d.decision} />}>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-        {d.rule_fired && <code className="rounded-sm border border-[var(--line)] bg-[var(--panel-hi)] px-2 py-0.5 text-[11px] text-[var(--ink)]">{d.rule_fired}</code>}
+        {d.rule_fired && <code className="rounded-sm border border-(--line) bg-(--panel-hi) px-2 py-0.5 text-[11px] text-(--ink)">{d.rule_fired}</code>}
         {prodGate && <span className="rounded-sm border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-300">🔒 Human approval required — always (staging→production)</span>}
       </div>
       <dl className="space-y-1.5 text-sm">
         {sections.filter(s => trail[s]).map(s => (
           <div key={s} className="flex gap-3">
-            <dt className="w-16 shrink-0 text-[10px] uppercase tracking-wide text-[var(--signal)] pt-0.5">{s}</dt>
-            <dd className="text-[var(--ink)]">{trail[s]}</dd>
+            <dt className="w-16 shrink-0 text-[10px] uppercase tracking-wide text-(--signal) pt-0.5">{s}</dt>
+            <dd className="text-(--ink)">{trail[s]}</dd>
           </div>
         ))}
       </dl>
       {d.actions_taken?.length ? (
-        <div className="mt-3 text-[11px] text-[var(--ink-dim)]">
+        <div className="mt-3 text-[11px] text-(--ink-dim)">
           actions: {d.actions_taken.map(a => `${a.action}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
         </div>
       ) : null}
       {d.approval_required && (
         <RoleGate need="approver">
-          <div className="mt-4 border-t border-[var(--line-soft)] pt-3">
+          <div className="mt-4 border-t border-(--line-soft) pt-3">
             <ApprovalControls runId={runId} onResolved={onResolved} />
           </div>
         </RoleGate>
@@ -161,7 +161,7 @@ export function ApprovalControls({ runId, approvalId, onResolved }:
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const id = approvalId ?? data?.approvals.find(a => a.run_id === runId)?.id
-  if (id == null) return <span className="text-xs text-[var(--ink-dim)]">No pending approval.</span>
+  if (id == null) return <span className="text-xs text-(--ink-dim)">No pending approval.</span>
   const act = (action: 'approve' | 'reject') => {
     if (action === 'reject' && !comment.trim()) return
     setBusy(true)
@@ -171,7 +171,7 @@ export function ApprovalControls({ runId, approvalId, onResolved }:
     <div className="space-y-2">
       <textarea value={comment} onChange={e => setComment(e.target.value)}
         placeholder="Comment (required to reject)"
-        className="w-full rounded-sm border border-[var(--line)] bg-[var(--bg-2)] p-2 text-sm focus:border-[var(--signal)]" rows={2} />
+        className="w-full rounded-sm border border-(--line) bg-(--bg-2) p-2 text-sm focus:border-(--signal)" rows={2} />
       <div className="flex gap-2">
         <button disabled={busy} onClick={() => act('approve')}
           className="rounded-sm border border-emerald-500/40 bg-emerald-500/10 px-4 py-1 text-xs uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50">Approve</button>
@@ -187,19 +187,19 @@ function RiskScoreCard({ r }: { r: NonNullable<RD['risk_score']> }) {
   const max = Math.max(1, ...contribs.map(c => Math.abs(c.points)))
   const esc = r.llm_escalation
   return (
-    <Card title="Risk Score" right={<code className="text-[10px] text-[var(--ink-dim)]">{r.formula_version}</code>}>
+    <Card title="Risk Score" right={<code className="text-[10px] text-(--ink-dim)">{r.formula_version}</code>}>
       <div className="flex flex-wrap items-center gap-6">
         <ScoreDial score={r.score} band={r.band} />
         <div className="min-w-56 flex-1 space-y-1.5">
-          {contribs.length === 0 && <p className="text-sm text-[var(--ink-dim)]">No contributing factors.</p>}
+          {contribs.length === 0 && <p className="text-sm text-(--ink-dim)">No contributing factors.</p>}
           {contribs.map((c, i) => (
             <div key={i} className="text-[11px]">
               <div className="flex justify-between">
-                <span className="text-[var(--ink-dim)]">{c.factor}{c.evidence_ref ? ` · ${c.evidence_ref}` : ''}</span>
-                <span className="font-bold tabular-nums text-[var(--ink-hi)]">+{c.points}</span>
+                <span className="text-(--ink-dim)">{c.factor}{c.evidence_ref ? ` · ${c.evidence_ref}` : ''}</span>
+                <span className="font-bold tabular-nums text-(--ink-hi)">+{c.points}</span>
               </div>
               <div className="mt-0.5 h-1.5 rounded-full bg-[rgba(148,163,184,0.1)]">
-                <div className="h-1.5 rounded-full bg-[var(--ink-dim)]" style={{ width: `${(Math.abs(c.points) / max) * 100}%` }} />
+                <div className="h-1.5 rounded-full bg-(--ink-dim)" style={{ width: `${(Math.abs(c.points) / max) * 100}%` }} />
               </div>
             </div>
           ))}
@@ -210,7 +210,7 @@ function RiskScoreCard({ r }: { r: NonNullable<RD['risk_score']> }) {
           )}
         </div>
       </div>
-      {r.explanation && <p className="mt-3 border-t border-[var(--line-soft)] pt-2 text-[11px] text-[var(--ink-dim)]">{r.explanation}</p>}
+      {r.explanation && <p className="mt-3 border-t border-(--line-soft) pt-2 text-[11px] text-(--ink-dim)">{r.explanation}</p>}
     </Card>
   )
 }
@@ -219,18 +219,18 @@ function ReviewReportCard({ r }: { r: NonNullable<RD['review_report']> }) {
   const findings = r.findings || []
   return (
     <Card title="Review Report" right={<HealthGauge value={r.pr_health_score} />}>
-      {r.executive_summary && <p className="mb-3 text-sm text-[var(--ink)]">{r.executive_summary}</p>}
-      {findings.length === 0 && <p className="text-sm text-[var(--ink-dim)]">No findings.</p>}
+      {r.executive_summary && <p className="mb-3 text-sm text-(--ink)">{r.executive_summary}</p>}
+      {findings.length === 0 && <p className="text-sm text-(--ink-dim)">No findings.</p>}
       <ul className="space-y-2">
         {findings.map((f: Finding) => (
-          <li key={f.id} className="rounded-sm border border-[var(--line)] bg-[var(--panel)] p-2">
+          <li key={f.id} className="rounded-sm border border-(--line) bg-(--panel) p-2">
             <div className="flex flex-wrap items-center gap-2">
               <SeverityChip s={f.severity} />
-              <span className="text-sm text-[var(--ink-hi)]">{f.title}</span>
+              <span className="text-sm text-(--ink-hi)">{f.title}</span>
               {f.source === 'llm' && <span className="rounded-sm border border-violet-500/30 bg-violet-500/10 px-1.5 text-[10px] uppercase text-violet-300">AI</span>}
-              {f.file && <code className="ml-auto text-[10px] text-[var(--ink-dim)]">{f.file}{f.line_start ? `:${f.line_start}` : ''}</code>}
+              {f.file && <code className="ml-auto text-[10px] text-(--ink-dim)">{f.file}{f.line_start ? `:${f.line_start}` : ''}</code>}
             </div>
-            {f.explanation && <p className="mt-1 text-[11px] text-[var(--ink-dim)]">{f.explanation}</p>}
+            {f.explanation && <p className="mt-1 text-[11px] text-(--ink-dim)">{f.explanation}</p>}
             {f.fix_suggestion && <p className="mt-1 text-[11px] text-emerald-400/80">fix: {f.fix_suggestion}</p>}
           </li>
         ))}
@@ -248,7 +248,7 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
   const subset = r.selection_mode === 'subset'
   const modeChip = r.selection_mode && (
     <span className={`inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 text-[10px] uppercase tracking-wider border ${
-      subset ? 'border-[var(--signal)]/40 bg-[var(--signal-dim)] text-[var(--signal)]'
+      subset ? 'border-(--signal)/40 bg-(--signal-dim) text-(--signal)'
              : 'border-amber-500/40 bg-amber-500/10 text-amber-300'}`}>
       {subset ? '◇ smart subset' : '◆ full suite · no mapping'}
     </span>
@@ -259,11 +259,11 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
       {total > 0 && (
         <div className="mb-3">
           <div className="mb-1 flex items-baseline justify-between">
-            <span className="text-2xl font-bold tabular-nums text-[var(--ink-hi)]">
-              {executed}<span className="text-[var(--ink-dim)] text-base"> / {total}</span>
-              <span className="ml-2 text-xs font-normal uppercase tracking-wide text-[var(--ink-dim)]">tests run</span>
+            <span className="text-2xl font-bold tabular-nums text-(--ink-hi)">
+              {executed}<span className="text-(--ink-dim) text-base"> / {total}</span>
+              <span className="ml-2 text-xs font-normal uppercase tracking-wide text-(--ink-dim)">tests run</span>
             </span>
-            <span className="text-sm font-semibold text-[var(--signal)]">{excluded} excluded · {savedPct}% skipped</span>
+            <span className="text-sm font-semibold text-(--signal)">{excluded} excluded · {savedPct}% skipped</span>
           </div>
           {/* selected vs excluded bar */}
           <div className="flex h-2 overflow-hidden rounded-full bg-[rgba(148,163,184,0.1)]">
@@ -273,19 +273,19 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
       )}
       <div className="flex flex-wrap gap-4 text-sm">
         <span className="text-emerald-300">▪ {t.passed} passed</span>
-        <span className={t.failed ? 'text-red-300' : 'text-[var(--ink-dim)]'}>▪ {t.failed} failed</span>
-        <span className="text-[var(--ink-dim)]">▪ {t.skipped} skipped</span>
+        <span className={t.failed ? 'text-red-300' : 'text-(--ink-dim)'}>▪ {t.failed} failed</span>
+        <span className="text-(--ink-dim)">▪ {t.skipped} skipped</span>
         {r.timed_out && <span className="text-red-300">timed out</span>}
-        {r.duration_seconds != null && <span className="ml-auto text-[var(--ink-dim)]">{r.duration_seconds}s · {r.runner}</span>}
+        {r.duration_seconds != null && <span className="ml-auto text-(--ink-dim)">{r.duration_seconds}s · {r.runner}</span>}
       </div>
       {r.cases && r.cases.length > 0 && (
-        <ul className="mt-3 max-h-44 space-y-1 overflow-auto border-t border-[var(--line-soft)] pt-2">
+        <ul className="mt-3 max-h-44 space-y-1 overflow-auto border-t border-(--line-soft) pt-2">
           {r.cases.map((c, i) => (
             <li key={i} className="text-[11px]">
               <div className="flex items-center gap-2">
                 <i className={`h-1.5 w-1.5 rounded-full ${statusColor[c.status] || 'bg-slate-500'}`} />
-                <code className="text-[var(--ink)]">{c.test_id}</code>
-                <span className="ml-auto text-[var(--ink-dim)]">{c.duration_ms}ms</span>
+                <code className="text-(--ink)">{c.test_id}</code>
+                <span className="ml-auto text-(--ink-dim)">{c.duration_ms}ms</span>
               </div>
               {c.failure_message && (c.status === 'failed' || c.status === 'error') && (
                 <details className="ml-3.5 mt-0.5">
@@ -298,7 +298,7 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
         </ul>
       )}
       {r.stage_failure && <p className="mt-2 text-[11px] text-amber-300">⚠ {r.stage_failure}</p>}
-      {r.command && <code className="mt-2 block truncate text-[10px] text-[var(--ink-dim)]" title={r.command}>{r.command}</code>}
+      {r.command && <code className="mt-2 block truncate text-[10px] text-(--ink-dim)" title={r.command}>{r.command}</code>}
     </Card>
   )
 }
@@ -306,16 +306,16 @@ function TestResultsCard({ r }: { r: NonNullable<RD['test_results']> }) {
 function TestPlanCard({ r }: { r: NonNullable<RD['test_plan']> }) {
   return (
     <Card title="Test Plan" right={r.selection_confidence
-      ? <span className="text-[10px] uppercase tracking-wide text-[var(--ink-dim)]">confidence: {r.selection_confidence}</span> : undefined}>
+      ? <span className="text-[10px] uppercase tracking-wide text-(--ink-dim)">confidence: {r.selection_confidence}</span> : undefined}>
       <ul className="space-y-1 text-sm">
         {(r.selected || []).map((s, i) => (
           <li key={i} className="flex flex-wrap gap-2">
-            <code className="text-[11px] text-[var(--ink)]">{s.test_id}</code>
-            <span className="text-[10px] text-[var(--ink-dim)]">{s.mapping_source}{s.reason ? ` · ${s.reason}` : ''}</span>
+            <code className="text-[11px] text-(--ink)">{s.test_id}</code>
+            <span className="text-[10px] text-(--ink-dim)">{s.mapping_source}{s.reason ? ` · ${s.reason}` : ''}</span>
           </li>
         ))}
       </ul>
-      {r.excluded_summary && <p className="mt-2 text-[11px] text-[var(--ink-dim)]">{r.excluded_summary}</p>}
+      {r.excluded_summary && <p className="mt-2 text-[11px] text-(--ink-dim)">{r.excluded_summary}</p>}
     </Card>
   )
 }

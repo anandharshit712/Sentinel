@@ -72,17 +72,17 @@ function useStatus(events: RunEvent[], state: RunState) {
 }
 
 const NODE: Record<Status, string> = {
-  pending: 'border-[var(--line)] text-[var(--ink-dim)] bg-[var(--panel)]',
-  active: 'border-[var(--signal)] text-[var(--ink-hi)] bg-[var(--signal-dim)]',
+  pending: 'border-(--line) text-(--ink-dim) bg-(--panel)',
+  active: 'border-(--signal) text-(--ink-hi) bg-(--signal-dim)',
   done: 'border-emerald-500/40 text-emerald-300 bg-emerald-500/5',
   failed: 'border-red-500/50 text-red-300 bg-red-500/10',
 }
 
 function Connector({ live, w = 28 }: { live: boolean; w?: number }) {
   return (
-    <div className="relative mt-[17px] h-px shrink-0 self-start" style={{ width: w }}>
+    <div className="relative mt-4.25 h-px shrink-0 self-start" style={{ width: w }}>
       <div className="h-px w-full" style={{ background: live ? 'var(--signal)' : 'var(--line)', boxShadow: live ? '0 0 6px var(--signal)' : undefined }} />
-      {live && <span className="absolute -top-[3px] h-[7px] w-[7px] rounded-full bg-[var(--signal)]"
+      {live && <span className="absolute -top-0.75 h-1.75 w-1.75 rounded-full bg-(--signal)"
                      style={{ boxShadow: '0 0 8px var(--signal)', offsetPath: `path("M0,0 H${w}")`, animation: 'packet 1.1s linear infinite' }} />}
     </div>
   )
@@ -91,10 +91,10 @@ function Connector({ live, w = 28 }: { live: boolean; w?: number }) {
 /* Fan block: the security_reviewer shards branch out of `Plan` and converge into `Senior`, so the
    parallel fan-out (B5/A8) reads as parallel, not a misleading sequential row. Geometry: rows are
    uniform h-9 (36px) with gap-2.5 (10px) → 46px pitch; the box center sits 17px down (matches
-   Connector's mt-[17px]). A vertical bus on each side spans first→last box center, fed from `Plan`
+   Connector's mt-4.25). A vertical bus on each side spans first→last box center, fed from `Plan`
    at the top and feeding `Senior` at the top; a horizontal stub bridges each bus to its node. */
 const ROW_PITCH = 46 // h-9 (36) + gap-2.5 (10)
-const BOX_MID = 17   // vertical center of the 36px box, matches Connector mt-[17px]
+const BOX_MID = 17   // vertical center of the 36px box, matches Connector mt-4.25
 function bus(live: boolean, side: 'left' | 'right', height: number) {
   return <span className={`absolute ${side}-0 w-px`}
                style={{ top: BOX_MID, height, background: live ? 'var(--signal)' : 'var(--line)',
@@ -105,7 +105,7 @@ function FanBlock({ shards, shardStatus, toolStatus, outLive, inLive }: {
   toolStatus: (id: string, active: boolean) => Status; outLive: boolean; inLive: boolean }) {
   const busH = Math.max(0, (shards.length - 1) * ROW_PITCH)
   const stub = (on: boolean) =>
-    <div className="mt-[17px] h-px w-3 shrink-0"
+    <div className="mt-4.25 h-px w-3 shrink-0"
          style={{ background: on ? 'var(--signal)' : 'var(--line)', boxShadow: on ? '0 0 4px var(--signal)' : undefined }} />
   return (
     <div className="flex items-start">
@@ -133,7 +133,7 @@ function NodeCard({ node, status, toolStatus }:
   { node: Node; status: Status; toolStatus: (id: string, active: boolean) => Status }) {
   const active = status === 'active'
   return (
-    <div className="flex w-[104px] shrink-0 flex-col items-center gap-1.5">
+    <div className="flex w-26 shrink-0 flex-col items-center gap-1.5">
       <div className={`flex h-9 w-full items-center justify-center rounded-sm border px-1 text-[11px] font-semibold uppercase tracking-wide transition-all ${NODE[status]}`}
            style={active ? { animation: 'pulse-ring 1.5s infinite', boxShadow: '0 0 10px var(--signal-dim)' } : undefined}>
         {node.label}
@@ -177,12 +177,12 @@ export function AgentGraph({ events, state, decision, shardCount }:
     <div className="overflow-x-auto pb-2">
       <div className="flex min-w-max items-start gap-0">
         {/* frontman */}
-        <div className="flex w-[104px] shrink-0 flex-col items-center">
+        <div className="flex w-26 shrink-0 flex-col items-center">
           <div className={`flex h-9 w-full items-center justify-center rounded-sm border px-1 text-[11px] font-semibold uppercase tracking-wide ${frontmanActive ? NODE.active : state === 'done' ? NODE.done : NODE.pending}`}
                style={frontmanActive ? { boxShadow: '0 0 10px var(--signal-dim)' } : undefined}>
             {FRONTMAN.label}
           </div>
-          <span className="mt-1 text-[9px] uppercase tracking-widest text-[var(--ink-dim)]">frontman</span>
+          <span className="mt-1 text-[9px] uppercase tracking-widest text-(--ink-dim)">frontman</span>
         </div>
         {PIPELINE.map((node, i) => {
           if (node.shard) {
@@ -202,14 +202,14 @@ export function AgentGraph({ events, state, decision, shardCount }:
         {/* decision terminal */}
         <div className="flex items-start">
           <Connector live={false} />
-          <div className="flex w-[92px] shrink-0 flex-col items-center">
+          <div className="flex w-23 shrink-0 flex-col items-center">
             <div className="flex h-9 w-full items-center justify-center rounded-sm border px-1 text-[11px] font-bold uppercase tracking-wide"
                  style={{ borderColor: decision ? decColor : 'var(--line)', color: decision ? decColor : 'var(--ink-dim)',
                           background: decision ? `${decColor}14` : 'transparent',
                           boxShadow: decision ? `0 0 10px ${decColor}30` : undefined }}>
               {decision || '···'}
             </div>
-            <span className="mt-1 text-[9px] uppercase tracking-widest text-[var(--ink-dim)]">decision</span>
+            <span className="mt-1 text-[9px] uppercase tracking-widest text-(--ink-dim)">decision</span>
           </div>
         </div>
       </div>

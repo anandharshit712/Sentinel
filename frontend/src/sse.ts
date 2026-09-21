@@ -8,8 +8,10 @@ import type { RunEvent, RunState } from './types'
 export function useRunEvents(id: string, active: boolean, onDone?: () => void) {
   const [events, setEvents] = useState<RunEvent[]>([])
   const [liveState, setLiveState] = useState<RunState | null>(null)
+  // Latest-callback ref, updated in an effect rather than during render: writing to a ref while
+  // rendering is what React warns about, and the stream only reads it from an event handler.
   const doneRef = useRef(onDone)
-  doneRef.current = onDone
+  useEffect(() => { doneRef.current = onDone })
 
   useEffect(() => {
     if (!id || !active) return
