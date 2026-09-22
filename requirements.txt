@@ -33,3 +33,6 @@ tree-sitter-language-pack>=0.2
 
 # --- Dev / test ---
 pytest>=8.0
+# Line coverage for the Phase 3 gap analysis (09 §4 P3.2). test_runner probes for it and
+# simply skips --cov when it is absent, so a target repo without it still runs its tests.
+pytest-cov>=5.0

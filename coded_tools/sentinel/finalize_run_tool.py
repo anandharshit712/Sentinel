@@ -74,6 +74,16 @@ class FinalizeRunTool(CodedTool):
             contracts.validate("env_context", wrapped)
             sly_data["env_context"] = wrapped
 
+            # ---- 1b. coverage gaps (09 §4 P3.3) -----------------------------------------
+            # Runs here rather than as its own chain step: it needs test_results, it is pure
+            # arithmetic, and the promotion chain is the one thing that must always finish.
+            # Advisory only — nothing below reads it, and an unmeasured run is not a clean one.
+            from coded_tools.sentinel.coverage_gap_tool import CoverageGapTool
+            gaps = CoverageGapTool().invoke({}, sly_data)
+            if isinstance(gaps, dict):
+                sly_data["coverage_gaps"] = contracts.wrap(
+                    gaps, run_id=str(run_id), produced_by="coverage_gap")
+
             # ---- 2. risk score (risk-v1, deterministic) ---------------------------------
             risk = RiskCalculatorTool().invoke({}, sly_data)
             if (e := _err("risk_calculator", risk)):

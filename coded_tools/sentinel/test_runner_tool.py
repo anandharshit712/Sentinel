@@ -162,6 +162,22 @@ def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout:
     return py
 
 
+def _has_pytest_cov(py: str, env: Dict[str, str]) -> bool:
+    """Is pytest-cov importable in the interpreter that will run the tests?
+
+    Probed rather than assumed: the tests may run in a per-run venv built from the target repo's
+    own requirements (`install_deps`), which is a different interpreter from Sentinel's. Passing
+    --cov without the plugin makes pytest exit on an unknown argument and turns a healthy suite
+    into a stage failure.
+    """
+    try:
+        r = subprocess.run([py, "-c", "import pytest_cov"], env=env, capture_output=True,
+                           timeout=30, check=False)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def _collect_total(py: str, repo: str, env: Dict[str, str], timeout: int) -> int:
     """Total tests pytest would collect for the WHOLE suite — the denominator for selection."""
     try:
@@ -323,6 +339,15 @@ class TestRunnerTool(CodedTool):
         fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-")
         os.close(fd)
         cmd = [py, "-m", "pytest", *ids, "--junitxml", xml_path, "-q", "-p", "no:cacheprovider"]
+
+        # Line coverage for the gap analysis (09 §4 P3.2), added ONLY when pytest-cov is present
+        # in the interpreter that will run the tests. Coverage is a bonus signal: the test result
+        # is the product, so a missing plugin must change nothing about the run.
+        cov_path = None
+        if _has_pytest_cov(py, env):
+            fd, cov_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-cov-")
+            os.close(fd)
+            cmd += ["--cov", ".", "--cov-report", f"json:{cov_path}"]
         start = time.perf_counter()
         try:
             subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
@@ -336,6 +361,8 @@ class TestRunnerTool(CodedTool):
                                    "duration_seconds": elapsed, "timed_out": timed_out,
                                    "suite_total": suite_total, "selection_mode": selection_mode,
                                    "selected_ids": ids}
+        if cov_path and os.path.exists(cov_path) and os.path.getsize(cov_path) > 0:
+            payload["coverage_report"] = cov_path   # read by coverage_gap (09 §4 P3.3)
         if timed_out:
             payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
                            stage_failure=f"test run exceeded {timeout}s")

@@ -163,6 +163,42 @@ _FINDINGS = _contract(
     ["findings"],
 )
 
+# ---- coverage_gaps (09 §4 P3.4) — changed code no test executes ----
+_COVERAGE_GAPS = _contract(
+    {
+        "gaps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": _S,
+                    "function": _S,
+                    "line_start": _I,
+                    "line_end": _I,
+                    "status": {"enum": ["uncovered", "partial", "covered"]},
+                    "uncovered_lines": {"type": "array", "items": _I},
+                    "covered_lines": _I,
+                    "total_lines": _I,
+                    "is_new": _B,
+                    "sensitive": _B,          # inside a file carrying a sensitive_flag
+                    "priority": _N,           # higher first; see coverage_gap_tool._priority
+                },
+                "required": ["file", "function", "status", "priority"],
+            },
+        },
+        "measured": _B,        # False when no coverage report was produced at all
+        "reason": _S,          # why not, when measured is False
+        "totals": {
+            "type": "object",
+            "properties": {
+                "functions_changed": _I, "uncovered": _I, "partial": _I, "covered": _I,
+                "changed_lines_measured": _I, "changed_lines_covered": _I,
+            },
+        },
+    },
+    ["gaps", "measured"],
+)
+
 # ---- 4.4 review_report ----
 _REVIEW_REPORT = _contract(
     {
@@ -378,6 +414,7 @@ CONTRACTS: dict[str, dict] = {
     "security_findings_shard_3": _FINDINGS,
     "security_findings_shard_4": _FINDINGS,
     "review_plan": _REVIEW_PLAN,
+    "coverage_gaps": _COVERAGE_GAPS,
     "senior_summary": _SENIOR_SUMMARY,
     "review_report": _REVIEW_REPORT,
     "test_plan": _TEST_PLAN,
@@ -476,6 +513,14 @@ _SAMPLE_PAYLOADS: dict[str, dict] = {
                       "title": "GPL-3.0 dependency in a permissive project", "explanation": "…",
                       "fix_suggestion": "replace with a permissively licensed equivalent",
                       "source": "tool"}],
+    },
+    "coverage_gaps": {
+        "gaps": [{"file": "app/orders.py", "function": "load", "line_start": 5, "line_end": 10,
+                  "status": "uncovered", "uncovered_lines": [7, 8, 9], "covered_lines": 0,
+                  "total_lines": 3, "is_new": True, "sensitive": False, "priority": 6.0}],
+        "measured": True,
+        "totals": {"functions_changed": 1, "uncovered": 1, "partial": 0, "covered": 0,
+                   "changed_lines_measured": 3, "changed_lines_covered": 0},
     },
     "review_plan": {
         "mode": "audit",

@@ -114,3 +114,68 @@ def test_only_the_target_function_is_mutated():
 
 def test_limit_is_respected():
     assert len(mutate.generate(SRC, "discount", limit=3)) == 3
+
+
+# ---------------------------------------------------------------- coverage gaps
+from coded_tools.sentinel.coverage_gap_tool import CoverageGapTool, analyse  # noqa: E402
+
+from lib import contracts  # noqa: E402
+
+
+def test_coverage_gap_selfcheck():
+    from coded_tools.sentinel import coverage_gap_tool
+    coverage_gap_tool.demo()
+
+
+def test_def_line_does_not_disguise_an_untested_function():
+    """coverage.py marks `def` as executed at import.
+
+    Counting it would report every untested function as merely 'partial' — the gaps this tool
+    exists to find would be the ones it hides.
+    """
+    profile = {"files": [{"path": "a.py", "change_type": "modified", "functions_changed": [
+        {"name": "f", "line_start": 1, "line_end": 3}]}]}
+    out = analyse(profile, {"a.py": {1: 1, 2: 0, 3: 0}})
+    assert out["gaps"][0]["status"] == "uncovered", out["gaps"][0]
+    assert out["gaps"][0]["total_lines"] == 2
+
+
+def test_sensitive_code_outranks_a_bigger_ordinary_gap():
+    profile = {
+        "files": [
+            {"path": "app/auth.py", "change_type": "modified", "functions_changed": [
+                {"name": "login", "line_start": 1, "line_end": 3}]},
+            {"path": "app/util.py", "change_type": "modified", "functions_changed": [
+                {"name": "helper", "line_start": 1, "line_end": 12, "is_new": True}]},
+        ],
+        "sensitive_flags": [{"flag": "auth", "files": ["app/auth.py"]}],
+    }
+    cov = {"app/auth.py": {1: 1, 2: 0, 3: 0},
+           "app/util.py": {n: (1 if n == 1 else 0) for n in range(1, 13)}}
+    assert [g["function"] for g in analyse(profile, cov)["gaps"]] == ["login", "helper"]
+
+
+def test_unmeasured_is_never_reported_as_covered():
+    """The failure mode that matters: a run with no coverage data must not look clean."""
+    res = CoverageGapTool().invoke({}, {"run_id": "t", "change_profile": {"files": []}})
+    assert res["measured"] is False
+    assert res["gaps"] == []
+    assert "reason" in res and res["reason"]
+
+    res2 = CoverageGapTool().invoke(
+        {"coverage_report": "no/such/report.json"}, {"run_id": "t", "change_profile": {"files": []}})
+    assert res2["measured"] is False
+
+
+def test_deleted_files_are_not_gaps():
+    profile = {"files": [{"path": "gone.py", "change_type": "deleted", "functions_changed": [
+        {"name": "old", "line_start": 1, "line_end": 5}]}]}
+    assert analyse(profile, {"gone.py": {2: 0}})["gaps"] == []
+
+
+def test_coverage_gaps_contract_validates():
+    profile = {"files": [{"path": "a.py", "change_type": "modified", "functions_changed": [
+        {"name": "f", "line_start": 1, "line_end": 3, "is_new": True}]}]}
+    out = analyse(profile, {"a.py": {1: 1, 2: 0, 3: 0}})
+    contracts.validate("coverage_gaps", contracts.wrap(out, run_id="t", produced_by="coverage_gap"))
+    contracts.validate("coverage_gaps", contracts.sample("coverage_gaps", run_id="t"))
