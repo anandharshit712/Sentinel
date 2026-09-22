@@ -7,6 +7,7 @@ score means nothing.
 """
 import ast
 import json
+import os
 
 from lib import coverage_parse, mutate
 
@@ -179,3 +180,74 @@ def test_coverage_gaps_contract_validates():
     out = analyse(profile, {"a.py": {1: 1, 2: 0, 3: 0}})
     contracts.validate("coverage_gaps", contracts.wrap(out, run_id="t", produced_by="coverage_gap"))
     contracts.validate("coverage_gaps", contracts.sample("coverage_gaps", run_id="t"))
+
+
+# ---------------------------------------------------------------- evaluator
+# NOTE: the module's own demo() runs four full mutation campaigns (~80s). It is the manual
+# self-check; the suite uses a two-line function so the same properties cost a few seconds.
+from coded_tools.sentinel.test_evaluator_tool import TestEvaluatorTool, is_tautology  # noqa: E402
+
+TINY = "def is_adult(age):\n    return age >= 18\n"
+
+
+def _ws(tmp_path, src=TINY):
+    (tmp_path / "person.py").write_text(src, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_tautology_detection():
+    assert is_tautology("def test_x():\n    assert True\n")
+    assert is_tautology("def test_x():\n    assert 1 == 1\n")
+    assert is_tautology("def test_x():\n    pass\n"), "no assertion asserts nothing"
+    assert not is_tautology("def test_x():\n    assert f(1) == 2\n")
+    assert not is_tautology("def test_x():\n    assert result.total == 5\n")
+
+
+def test_a_test_that_catches_bugs_is_accepted(tmp_path):
+    good = ("from person import is_adult\n\n\n"
+            "def test_boundaries():\n"
+            "    assert is_adult(18) is True\n"
+            "    assert is_adult(17) is False\n")
+    r = TestEvaluatorTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": good,
+         "repo_workspace": _ws(tmp_path)}, {})
+    assert r["verdict"] == "accepted", r
+    assert r["mutation_score"] >= 0.5 and r["mutants_total"] > 0, r
+
+
+def test_a_test_that_catches_nothing_is_rejected_with_evidence(tmp_path):
+    """The point of the phase: passing is not the bar, catching injected bugs is."""
+    weak = ("from person import is_adult\n\n\n"
+            "def test_returns_bool():\n"
+            "    assert isinstance(is_adult(40), bool)\n")
+    r = TestEvaluatorTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": weak,
+         "repo_workspace": _ws(tmp_path)}, {})
+    assert r["verdict"] == "rejected", r
+    assert r["missed"], "a rejection must name the bugs that slipped through"
+    assert all("description" in m for m in r["missed"])
+
+
+def test_a_test_failing_on_correct_code_is_rejected_before_any_mutant(tmp_path):
+    broken = ("from person import is_adult\n\n\n"
+              "def test_wrong():\n"
+              "    assert is_adult(20) is False\n")
+    r = TestEvaluatorTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": broken,
+         "repo_workspace": _ws(tmp_path)}, {})
+    assert r["verdict"] == "rejected" and "unmodified" in r["reason"], r
+    assert r["mutants_total"] == 0, "no point mutating when the test is already red"
+
+
+def test_evaluation_never_writes_to_the_workspace(tmp_path):
+    """Mutants are written to a throwaway copy — the run workspace must come back untouched."""
+    ws = _ws(tmp_path)
+    good = ("from person import is_adult\n\n\n"
+            "def test_boundaries():\n"
+            "    assert is_adult(18) is True\n"
+            "    assert is_adult(17) is False\n")
+    TestEvaluatorTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": good,
+         "repo_workspace": ws}, {})
+    assert sorted(os.listdir(ws)) == ["person.py"], os.listdir(ws)
+    assert (tmp_path / "person.py").read_text(encoding="utf-8") == TINY
