@@ -29,6 +29,8 @@ def invoke_network(
     port: int,
     network: str = "sentinel",
     on_progress: Progress | None = None,
+    prompt: str | None = None,
+    extra_sly: dict | None = None,
 ) -> tuple[dict | None, dict, str]:
     """Run one DeliveryEvent through the network. Returns (structure, sly_data, answer).
 
@@ -38,9 +40,13 @@ def invoke_network(
     proc = StreamingInputProcessor(session=session)
     mp = proc.get_message_processor()
     sly = {"run_id": run_id, "event": event, "repo_workspace": workspace}
+    # The test-generation network runs on a finished run and needs that run's contracts seeded
+    # (it has no pipeline of its own to produce them) — 09 §2.
+    if extra_sly:
+        sly.update(extra_sly)
     # MAXIMAL filter so per-agent/tool progress ("Invoking: `x`") streams for the state machine + SSE
     req = proc.formulate_chat_request(
-        "Process this DeliveryEvent: " + json.dumps(event), sly,
+        prompt or ("Process this DeliveryEvent: " + json.dumps(event)), sly,
         chat_filter={"chat_filter_type": "MAXIMAL"})
 
     for r in session.streaming_chat(req):

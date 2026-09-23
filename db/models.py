@@ -63,6 +63,13 @@ review_plans = Table(
 # Generated-test proposals (09 §4 P3.8). Unlike the per-run contract tables this is
 # MANY rows per run — one per proposed test — and it is never written by the promotion chain:
 # proposals are advisory and adopting one is a human action.
+coverage_gaps = Table(
+    "coverage_gaps", metadata,
+    Column("run_id", _UUID, primary_key=True),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", _TS, server_default=func.now()),
+)
+
 test_proposals = Table(
     "test_proposals", metadata,
     Column("id", BigInteger, primary_key=True, autoincrement=True),

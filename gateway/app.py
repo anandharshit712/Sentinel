@@ -244,6 +244,9 @@ def _do_persist_contracts(run_id: str, sly: dict) -> None:
     ec = sly.get("env_context") or {}
     if ec:
         dao.save_run_payload("env_contexts", run_id, ec)
+    cg = sly.get("coverage_gaps") or {}
+    if "measured" in cg:   # `measured: false` is a real result and must be stored as one
+        dao.save_run_payload("coverage_gaps", run_id, cg)
 
 
 async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> None:
@@ -416,6 +419,8 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
         "test_results": (dao.get_payload("test_results", run_id) or {}).get("payload"),
         "env_context": (dao.get_payload("env_contexts", run_id) or {}).get("payload"),
         "risk_score": (dao.get_payload("risk_scores", run_id) or {}).get("payload"),
+        "coverage_gaps": (dao.get_payload("coverage_gaps", run_id) or {}).get("payload"),
+        "test_proposals": dao.list_test_proposals(run_id),
         "decision": dao.get_decision(run_id),
         "error": error,
     }
@@ -477,6 +482,69 @@ async def stop(run_id: str, _role: str = Depends(_require("approver"))) -> dict:
 @app.get("/api/v1/approvals")
 def approvals(status: str = "pending", _role: str = Depends(_require("viewer"))) -> dict:
     return {"approvals": dao.list_approvals(status)}
+
+
+class ProposalAction(BaseModel):
+    action: str  # adopt | discard
+
+
+@app.post("/api/v1/runs/{run_id}/generate-tests", status_code=200)
+async def generate_tests(run_id: str, _role: str = Depends(_require("approver"))) -> dict:
+    """Write tests for this run's coverage gaps (09 §2).
+
+    Deliberately synchronous and off the promotion path: this runs AFTER a run has finished, never
+    gates anything, and writes nothing into the source repository. The run's workspace is deleted
+    when the run ends, so the repo is cloned again here and removed afterwards.
+    """
+    run = dao.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "run not found")
+    gaps = (dao.get_payload("coverage_gaps", run_id) or {}).get("payload") or {}
+    if not [g for g in (gaps.get("gaps") or []) if g.get("status") != "covered"]:
+        return {"run_id": run_id, "proposals": [], "reason": (
+            "no coverage was measured for this run" if gaps.get("measured") is False
+            else "no uncovered changed code to write tests for")}
+
+    event = run.get("event") or {}
+    ws = await asyncio.to_thread(_clone, event, f"{run_id}-testgen")
+    try:
+        last_error = None
+        # One retry: generation is advisory, and the provider returns intermittent 500s that kill
+        # a run mid-loop (see docs/model-evaluation.md §8). Retrying a non-gating flow is cheap;
+        # retrying the promotion chain would not be.
+        for attempt in (1, 2):
+            try:
+                await asyncio.to_thread(
+                    invoke_network, run_id, event, ws,
+                    host=settings.NEURO_SAN_HOST, port=settings.NEURO_SAN_PORT,
+                    network="sentinel_testgen",
+                    prompt="Write a test for the highest-priority coverage gap in this run.",
+                    extra_sly={"coverage_gaps": gaps})   # gap_context reads the workspace for the rest
+                last_error = None
+                break
+            except Exception as e:
+                last_error = str(e)[:300]
+                logger.warning("run %s: test generation attempt %d failed: %s", run_id, attempt, last_error)
+        proposals = dao.list_test_proposals(run_id)
+        dao.record_audit(run_id, actor="gateway", action="tests_generated",
+                         payload={"proposals": len(proposals), "error": last_error})
+        return {"run_id": run_id, "proposals": proposals, "error": last_error}
+    finally:
+        workspace.cleanup_workspace(f"{run_id}-testgen")
+
+
+@app.post("/api/v1/proposals/{proposal_id}")
+def resolve_proposal(proposal_id: int, body: ProposalAction,
+                     role: str = Depends(_require("approver"))) -> dict:
+    """Adopt or discard a generated test. Adopting records the decision — it does not commit the
+    test; the diff is the developer's to apply (09 §2)."""
+    if body.action not in ("adopt", "discard"):
+        raise HTTPException(400, "action must be adopt or discard")
+    status = "adopted" if body.action == "adopt" else "discarded"
+    if not dao.set_proposal_status(proposal_id, status):
+        raise HTTPException(404, "proposal not found")
+    dao.record_audit(None, actor=role, action=f"proposal_{status}", payload={"proposal_id": proposal_id})
+    return {"proposal_id": proposal_id, "status": status}
 
 
 class ApprovalResolve(BaseModel):

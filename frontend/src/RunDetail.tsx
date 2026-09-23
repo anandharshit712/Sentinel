@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import type { RunDetail as RD, Finding, RunState } from './types'
+import type { RunDetail as RD, Finding, RunState, CoverageGaps, TestProposal } from './types'
 import {
   BandChip, DecisionChip, SeverityChip, StateChip, ScoreDial, HealthGauge, Card,
   RoleGate, useRun, useApprovals, resolveApproval, rerun, stopRun, STAGES, stageRank,
+  generateTests, resolveProposal,
 } from './lib'
 import { useRunEvents } from './sse'
 import { AgentGraph } from './AgentGraph'
@@ -22,7 +23,8 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   if (loading && !data) return <div className="p-6 text-(--ink-dim)">Loading {id}…</div>
   if (error) return <div className="p-6 text-red-400">Error: {error}</div>
   if (!data) return null
-  const { run, review_report, test_plan, test_results, risk_score, review_plan, decision, error: failReason } = data
+  const { run, review_report, test_plan, test_results, risk_score, review_plan, decision,
+          coverage_gaps, test_proposals, error: failReason } = data
   const state = (liveState || run.state) as RunState
   const prodGate = run.to_env === 'production'
   const dec = decision?.decision ?? run.decision
@@ -56,6 +58,9 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
       {review_report && <ReviewReportCard r={review_report} />}
       {test_results && <TestResultsCard r={test_results} />}
       {test_plan && <TestPlanCard r={test_plan} />}
+      {(coverage_gaps || (test_proposals && test_proposals.length > 0)) &&
+        <GeneratedTestsCard runId={id} gaps={coverage_gaps} proposals={test_proposals || []}
+                            onChanged={refetch} />}
       {!decision && state !== 'failed' && <p className="text-sm text-(--ink-dim)">No decision yet — pipeline running.</p>}
     </div>
   )
@@ -179,6 +184,114 @@ export function ApprovalControls({ runId, approvalId, onResolved }:
           className="rounded-sm border border-red-500/40 bg-red-500/10 px-4 py-1 text-xs uppercase tracking-wide text-red-300 hover:bg-red-500/20 disabled:opacity-40">Reject</button>
       </div>
     </div>
+  )
+}
+
+function GeneratedTestsCard({ runId, gaps, proposals, onChanged }: {
+  runId: string; gaps?: CoverageGaps | null; proposals: TestProposal[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [open, setOpen] = useState<number | null>(null)
+  const uncovered = (gaps?.gaps || []).filter(g => g.status !== 'covered')
+
+  const run = () => {
+    setBusy(true); setErr('')
+    generateTests(runId).then(r => { if (r.error) setErr(r.error); onChanged() })
+      .catch(e => setErr(String(e))).finally(() => setBusy(false))
+  }
+  const act = (id: number, action: 'adopt' | 'discard') =>
+    resolveProposal(id, action).then(onChanged).catch(e => setErr(String(e)))
+
+  return (
+    <Card title="Generated Tests" right={
+      <span className="text-[10px] uppercase tracking-widest text-(--ink-dim)">
+        {gaps?.measured === false ? 'coverage not measured'
+          : `${uncovered.length} gap${uncovered.length === 1 ? '' : 's'}`}
+      </span>}>
+      {/* An unmeasured run is not a covered run — say which one this is. */}
+      {gaps?.measured === false && (
+        <p className="mb-3 text-[11px] text-(--ink-dim)">{gaps.reason || 'No coverage data for this run.'}</p>
+      )}
+
+      {uncovered.length > 0 && (
+        <ul className="mb-3 space-y-1 text-[11px]">
+          {uncovered.slice(0, 5).map((g, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-2">
+              <code className="text-(--ink)">{g.file}::{g.function}</code>
+              <span className={g.status === 'uncovered' ? 'text-red-300' : 'text-amber-300'}>{g.status}</span>
+              <span className="text-(--ink-dim)">
+                {g.covered_lines ?? 0}/{g.total_lines ?? 0} body lines covered
+                {g.sensitive ? ' · sensitive' : ''}{g.is_new ? ' · new' : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <RoleGate need="approver">
+        {uncovered.length > 0 && (
+          <button disabled={busy} onClick={run}
+            className="mb-3 rounded-sm border border-(--signal)/40 bg-(--signal-dim) px-3 py-1 text-xs uppercase tracking-wide text-(--signal) hover:bg-(--signal)/10 disabled:opacity-50">
+            {busy ? 'Writing and proving a test…' : 'Generate tests'}
+          </button>
+        )}
+      </RoleGate>
+      {err && <p className="mb-2 text-[11px] text-red-300">{err}</p>}
+
+      {proposals.length === 0 && !busy && (
+        <p className="text-[11px] text-(--ink-dim)">No proposals yet. Nothing is ever committed — a
+          proposal is a diff you accept or discard.</p>
+      )}
+
+      <div className="space-y-2">
+        {proposals.map(p => {
+          const ev = p.evaluation || {}
+          const caught = (ev.caught || []).length
+          const total = ev.mutants_total ?? 0
+          const good = p.verdict === 'accepted'
+          return (
+            <div key={p.id} className={`rounded-sm border p-2 ${good ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-(--line)'}`}>
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className={`rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
+                  good ? 'border-emerald-500/40 text-emerald-300' : 'border-slate-500/40 text-slate-300'}`}>{p.verdict}</span>
+                <code className="text-(--ink)">{p.target_file}::{p.target_function}</code>
+                {/* the evidence, not an opinion: injected bugs caught out of injected bugs tried */}
+                <span className="text-(--ink-dim)">caught {caught}/{total} injected bugs</span>
+                <span className="font-bold tabular-nums text-(--ink-hi)">
+                  {p.mutation_score == null ? '—' : p.mutation_score.toFixed(2)}
+                </span>
+                <span className={`ml-auto text-[10px] uppercase tracking-wider ${
+                  p.status === 'adopted' ? 'text-emerald-300'
+                  : p.status === 'discarded' ? 'text-(--ink-dim)' : 'text-amber-300'}`}>{p.status}</span>
+              </div>
+              {ev.reason && <p className="mt-1 text-[11px] text-(--ink-dim)">{ev.reason}</p>}
+              {(ev.missed || []).length > 0 && (
+                <p className="mt-1 text-[11px] text-amber-300/80">
+                  missed: {(ev.missed || []).map(m => m.description).join('; ')}
+                </p>
+              )}
+              <button onClick={() => setOpen(open === p.id ? null : p.id)}
+                className="mt-2 text-[10px] uppercase tracking-widest text-(--ink-dim) hover:text-(--signal)">
+                {open === p.id ? 'hide' : 'show'} the test
+              </button>
+              {open === p.id && (
+                <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-sm border border-(--line) bg-(--bg-2) p-2 text-[11px] text-(--ink)">{p.test_source}</pre>
+              )}
+              {p.status === 'proposed' && (
+                <RoleGate need="approver">
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={() => act(p.id, 'adopt')}
+                      className="rounded-sm border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[11px] uppercase tracking-wide text-emerald-300 hover:bg-emerald-500/20">Adopt</button>
+                    <button onClick={() => act(p.id, 'discard')}
+                      className="rounded-sm border border-(--line) px-3 py-1 text-[11px] uppercase tracking-wide text-(--ink-dim) hover:border-red-500/40 hover:text-red-300">Discard</button>
+                  </div>
+                </RoleGate>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
   )
 }
 

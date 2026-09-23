@@ -103,6 +103,12 @@ export const useAudit = (runId?: string) =>
 
 export const resolveApproval = (id: number, action: 'approve' | 'reject', comment: string) =>
   api(`/api/v1/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action, comment }) })
+export const generateTests = (id: string) =>
+  api<{ run_id: string; proposals: any[]; reason?: string; error?: string }>(
+    `/api/v1/runs/${id}/generate-tests`, { method: 'POST' })
+export const resolveProposal = (id: number, action: 'adopt' | 'discard') =>
+  api<{ proposal_id: number; status: string }>(`/api/v1/proposals/${id}`,
+    { method: 'POST', body: JSON.stringify({ action }) })
 export const rerun = (id: string) =>
   api<{ run_id: string }>(`/api/v1/runs/${id}/rerun`, { method: 'POST' })
 export const stopRun = (id: string) =>

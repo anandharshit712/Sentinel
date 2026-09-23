@@ -95,7 +95,42 @@ export interface RunDetail {
   risk_score?: RiskScore | null
   review_plan?: { shards?: any[]; metrics?: any } | null   // audit fan-out sizing (shards.length = # SEC agents)
   decision?: (DecisionContract & { reasoning_trail?: any }) | null
+  coverage_gaps?: CoverageGaps | null
+  test_proposals?: TestProposal[]
   error?: string | null          // run_failed reason (present when state === 'failed')
+}
+
+export interface CoverageGap {
+  file: string; function: string; status: 'uncovered' | 'partial' | 'covered'
+  line_start?: number; line_end?: number; uncovered_lines?: number[]
+  covered_lines?: number; total_lines?: number; is_new?: boolean; sensitive?: boolean
+  priority: number
+}
+
+export interface CoverageGaps {
+  gaps: CoverageGap[]
+  measured: boolean              // false = no coverage data; NOT the same as "all covered"
+  reason?: string
+  totals?: { functions_changed?: number; uncovered?: number; partial?: number; covered?: number
+             changed_lines_measured?: number; changed_lines_covered?: number }
+}
+
+export interface TestProposal {
+  id: number
+  target_file: string
+  target_function: string
+  test_path: string
+  test_source: string
+  verdict: 'accepted' | 'rejected' | 'inconclusive'
+  mutation_score: number | null
+  status: 'proposed' | 'adopted' | 'discarded'
+  evaluation: {
+    reason?: string
+    caught?: { id: string; operator: string; description: string }[]
+    missed?: { id: string; operator: string; description: string }[]
+    mutants_total?: number
+    threshold?: number
+  }
 }
 
 export interface RunEvent {
