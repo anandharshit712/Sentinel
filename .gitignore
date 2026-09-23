@@ -16,3 +16,12 @@ nss_local.db
 
 #node modules
 /samples/node-catalog-service/node_modules
+
+# coverage artifacts — pytest --cov (09 §4 P3.2) writes these INTO the repo under test, so a
+# `git add -A` after a test run will otherwise commit a binary blob from a sample project.
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+htmlcov/
+lcov.info
