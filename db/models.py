@@ -60,6 +60,24 @@ review_plans = Table(
     Column("created_at", _TS, server_default=func.now()),
 )
 
+# Generated-test proposals (09 §4 P3.8). Unlike the per-run contract tables this is
+# MANY rows per run — one per proposed test — and it is never written by the promotion chain:
+# proposals are advisory and adopting one is a human action.
+test_proposals = Table(
+    "test_proposals", metadata,
+    Column("id", BigInteger, primary_key=True, autoincrement=True),
+    Column("run_id", _UUID, nullable=False),
+    Column("target_file", Text, nullable=False),
+    Column("target_function", Text, nullable=False),
+    Column("test_path", Text, nullable=False),
+    Column("test_source", Text, nullable=False),
+    Column("verdict", Text, nullable=False),          # accepted | rejected | inconclusive
+    Column("mutation_score", Float),
+    Column("evaluation", JSONB, nullable=False),      # caught/missed mutants, threshold, reason
+    Column("status", Text, nullable=False),           # proposed | adopted | discarded
+    Column("created_at", _TS, server_default=func.now()),
+)
+
 test_plans = Table(
     "test_plans", metadata,
     Column("run_id", _UUID, primary_key=True),

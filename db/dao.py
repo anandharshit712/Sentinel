@@ -210,6 +210,38 @@ def resolve_approval(approval_id: int, status: str, approver: str,
     return dict(row) if row else None
 
 
+def insert_test_proposal(run_id: str, *, target_file: str, target_function: str,
+                         test_path: str, test_source: str, verdict: str,
+                         mutation_score: float | None, evaluation: dict) -> int:
+    """Store one generated-test proposal. Returns its id. Status starts at 'proposed' — adopting
+    a test is a human action, never something the pipeline does (09 §2)."""
+    with get_engine().begin() as c:
+        row = c.execute(
+            models.test_proposals.insert().returning(models.test_proposals.c.id),
+            {"run_id": run_id, "target_file": target_file, "target_function": target_function,
+             "test_path": test_path, "test_source": test_source, "verdict": verdict,
+             "mutation_score": mutation_score, "evaluation": evaluation, "status": "proposed"},
+        ).first()
+    return int(row[0])
+
+
+def list_test_proposals(run_id: str | None = None, limit: int = 100) -> list[dict]:
+    q = models.test_proposals.select().order_by(models.test_proposals.c.created_at.desc()).limit(limit)
+    if run_id:
+        q = q.where(models.test_proposals.c.run_id == run_id)
+    with get_engine().begin() as c:
+        return [dict(r) for r in c.execute(q).mappings()]
+
+
+def set_proposal_status(proposal_id: int, status: str) -> bool:
+    """'adopted' or 'discarded' — the human verdict, distinct from the tool's `verdict`."""
+    with get_engine().begin() as c:
+        r = c.execute(models.test_proposals.update()
+                      .where(models.test_proposals.c.id == proposal_id)
+                      .values(status=status))
+    return r.rowcount > 0
+
+
 def list_audit(run_id: str | None = None, limit: int = 200) -> list[dict]:
     e = models.audit_events
     q = select(e).order_by(e.c.at.desc()).limit(limit)

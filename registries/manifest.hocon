@@ -1,4 +1,7 @@
 # Sentinel network manifest. Each served network = a key with boolean true. (04 §5)
 {
-    "sentinel.hocon": true
+    "sentinel.hocon": true,
+    # Test generation is a separate network, invoked on demand after a run — it must
+    # never sit on the promotion chain (09 §2).
+    "sentinel_testgen.hocon": true
 }

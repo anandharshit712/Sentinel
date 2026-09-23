@@ -251,3 +251,64 @@ def test_evaluation_never_writes_to_the_workspace(tmp_path):
          "repo_workspace": ws}, {})
     assert sorted(os.listdir(ws)) == ["person.py"], os.listdir(ws)
     assert (tmp_path / "person.py").read_text(encoding="utf-8") == TINY
+
+
+# ---------------------------------------------------------------- generation inputs/outputs
+from coded_tools.sentinel.gap_context_tool import GapContextTool  # noqa: E402
+from coded_tools.sentinel.proposal_store_tool import ProposalStoreTool  # noqa: E402
+
+
+def _gap_ws(tmp_path):
+    (tmp_path / "shop.py").write_text(
+        "def apply_coupon(total, code, days_left):\n"
+        "    if code == 'SAVE10' and days_left > 0:\n"
+        "        return round(total * 0.9, 2)\n"
+        "    return total\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_shop.py").write_text(
+        "from shop import apply_coupon\n\n\ndef test_none():\n"
+        "    assert apply_coupon(10.0, 'X', 1) == 10.0\n", encoding="utf-8")
+    return {"run_id": "t", "repo_workspace": str(tmp_path), "coverage_gaps": {
+        "measured": True, "gaps": [{"file": "shop.py", "function": "apply_coupon",
+                                    "status": "partial", "line_start": 1, "line_end": 4,
+                                    "uncovered_lines": [3], "priority": 3.1}]}}
+
+
+def test_gap_context_selfcheck():
+    from coded_tools.sentinel import gap_context_tool
+    gap_context_tool.demo()
+
+
+def test_gap_context_gives_the_llm_what_it_cannot_read(tmp_path):
+    """An LLM sees neither sly_data nor the repo, so everything must arrive in the tool result."""
+    out = GapContextTool().invoke({}, _gap_ws(tmp_path))
+    assert "days_left > 0" in out["function_source"], "the real source, not a summary"
+    assert out["uncovered_lines"][0]["line"] == 3, out["uncovered_lines"]
+    assert out["module_path"] == "shop", "the import path a test would use"
+    assert out["example_tests"], "project style is shown, not described"
+
+
+def test_gap_context_reports_nothing_to_do_rather_than_inventing_a_target(tmp_path):
+    sly = _gap_ws(tmp_path)
+    sly["coverage_gaps"] = {"measured": False, "gaps": []}
+    out = GapContextTool().invoke({}, sly)
+    assert out["gap"] is None and "no coverage" in out["reason"]
+
+    sly["coverage_gaps"] = {"measured": True, "gaps": []}
+    assert GapContextTool().invoke({}, sly)["gap"] is None
+
+
+def test_proposal_store_measures_rather_than_trusting_the_agent(tmp_path):
+    """The agent reports nothing; the score in the record is the one the tool measured."""
+    (tmp_path / "person.py").write_text("def is_adult(age):\n    return age >= 18\n", encoding="utf-8")
+    weak = ("from person import is_adult\n\n\n"
+            "def test_weak():\n    assert isinstance(is_adult(40), bool)\n")
+    out = ProposalStoreTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": weak,
+         "repo_workspace": str(tmp_path)},
+        {"run_id": "not-a-uuid"})          # DB insert fails on purpose
+    assert out["verdict"] == "rejected", out
+    assert out["status"] == "proposed", "adoption is a human action"
+    # a persistence failure must surface, not blank the measured evidence (the 2026-08-16 lesson)
+    assert out["persisted"] is False and out["persist_error"], out
+    assert out["mutants_total"] and out["mutation_score"] is not None

@@ -14,6 +14,11 @@
         # network with NO live fallback. gpt-oss-20b scored 9/9 recall / 0 FPs in the bake-off
         # (docs/model-evaluation.md §3) and probes 3/3 with tool calls at ~1-4s (2026-09-20).
         { "class": "nvidia", "model_name": "openai/gpt-oss-20b", "temperature": 0.1 },
+        # Third rung, added 2026-09-23 during a NIM-wide bad patch: the primary was returning 500s
+        # and gpt-oss-20b was timing out at 90s, while this one still answered with tool calls
+        # (slowly, ~112s). Slow-but-alive is what keeps a run from dying — the 2026-09-20 outage
+        # was survivable only because SOMETHING below the primary still worked.
+        { "class": "nvidia", "model_name": "z-ai/glm-5.3-flash", "temperature": 0.1 },
         # meta/llama-3.3-70b-instruct (the originally documented primary) is deliberately NOT here:
         # it still times out at 120s on the public NIM endpoint.
         { "model_name": ${?FALLBACK_MODEL_NAME} }     # optional 2nd provider (gpt-4o / claude); ignored if unset
