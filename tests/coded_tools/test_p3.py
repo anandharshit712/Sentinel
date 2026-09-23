@@ -312,3 +312,24 @@ def test_proposal_store_measures_rather_than_trusting_the_agent(tmp_path):
     # a persistence failure must surface, not blank the measured evidence (the 2026-08-16 lesson)
     assert out["persisted"] is False and out["persist_error"], out
     assert out["mutants_total"] and out["mutation_score"] is not None
+
+
+def test_every_per_run_table_the_gateway_reads_is_registered():
+    """Guards a failure mode this project has now hit twice.
+
+    A name that exists as a table but is missing from a hand-maintained allow-list fails only when
+    something first touches it — for contract_store that was an agent retrying silently, and for
+    coverage_gaps it was a 500 from a live endpoint. Both lists are now checked by a test.
+    """
+    from db import models
+
+    from sqlalchemy import Table
+
+    # A per-run payload table is one whose PRIMARY KEY is run_id — exactly one row per run.
+    # Tables like audit_events and findings also carry run_id + payload but are many-per-run and
+    # are read through their own queries, not by name.
+    declared = {t.name for t in vars(models).values()
+                if isinstance(t, Table) and "payload" in t.columns
+                and [c.name for c in t.primary_key.columns] == ["run_id"]}
+    missing = declared - set(models.RUN_PAYLOAD_TABLES)
+    assert not missing, f"per-run payload tables the DAO cannot reach by name: {sorted(missing)}"

@@ -183,8 +183,12 @@ notifications = Table(
 )
 
 # name -> Table, for generic per-run payload writes
+# Every per-run JSONB table the DAO may read or write by name. A table missing from here is not a
+# loud failure at import: it is a KeyError at the moment something first tries to persist or read
+# it, which is usually a live run. tests/test_db.py guards it against the table definitions above.
 RUN_PAYLOAD_TABLES = {
     "review_reports": review_reports,
+    "coverage_gaps": coverage_gaps,
     "review_plans": review_plans,
     "test_plans": test_plans,
     "test_results": test_results,

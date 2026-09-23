@@ -95,12 +95,45 @@ ones — the whole point of P3.10 is producing that measurement.
 - **Learning from outcomes** (did an accepted test later catch a real bug?). That is Phase 4, and
   it needs this phase's records to exist first.
 
-## 7. Exit criteria
+## 7. Exit criteria — met 2026-09-23, with one number owed to the provider
 
-- [ ] `coverage_gap` finds the planted untested branch and ranks a sensitive-file gap above it.
-- [ ] A generated test for that gap passes on correct code and catches ≥ 50% of mutants.
-- [ ] A deliberately tautological test scores 0 and is rejected — the negative case is the one that
-      proves the gate does anything.
-- [ ] Nothing is written to the source repo at any point; proposals live in the database.
-- [ ] `verify_b4` and `verify_p2` still pass — the promotion chain is untouched.
-- [ ] Decision rate still 3/3.
+- [x] `coverage_gap` finds the planted untested branch and ranks a sensitive-file gap above it.
+- [x] A generated test for that gap passes on correct code and catches ≥ 50% of mutants.
+      Measured on the fixture: **score 1.00, 8 of 8 injected bugs caught**, on every trial that
+      completed.
+- [x] A tautological test scores 0 and is rejected — and so does a test that merely passes:
+      the three-way measurement was `1.00 accepted` / `0.25 rejected` / `0.12 rejected` across
+      thorough, happy-path-only and type-check-only tests (08-style evidence, in `test_p3.py`).
+- [x] Nothing is written to the source repository at any point; proposals live in the database.
+      Asserted in `verify_p3.py` and in a unit test.
+- [x] `verify_b4` and `verify_p2` still pass — the promotion chain is untouched by this phase.
+- [x] Decision rate still 3/3 (the chain gained no step; the gap analysis rides inside
+      `finalize_run`).
+- [~] `verify_p3` 3/3 — **measured 2/3.** The one failure was a provider `HTTP 500` mid-loop, not
+      a logic fault: both completed trials scored 1.00. See §8.
+- [x] Proposals are visible and actionable: the run detail's Generated Tests card shows the ranked
+      gaps (the sensitive one first), each proposal's verdict, mutation score, injected bugs caught
+      and missed, and the test itself. Verified in a browser, including Adopt flipping the status
+      to `adopted`.
+
+---
+
+## 8. What the provider costs this phase
+
+Generation is the only part of Sentinel that depends on a model completing a multi-step loop, so
+it is the part most exposed to NIM's reliability. Measured on 2026-09-23, a bad day:
+
+| | |
+|---|---|
+| `verify_p3` (direct to the network, no retry) | **2/3**, the failure a mid-loop 500 |
+| Probed directly | the primary returned 500 on even a *plain* request, then served the same request in 8.6s minutes later; `gpt-oss-20b` and `nemotron-3-ultra` timed out at 90–120s; four previously-working ids answered 410/404 |
+| Config response | `z-ai/glm-5.3-flash` added as a third fallback — slow (~112s) but alive during the window when the other two were not |
+
+The Gateway's `POST /runs/{id}/generate-tests` **retries once**, which is affordable precisely
+because this flow is advisory and gates nothing. The promotion chain deliberately does not get the
+same treatment: re-running a gate on a transient error would make the gate's behaviour depend on
+how many times it was asked.
+
+**A 2/3 here is not the same kind of number as a 2/3 on the promotion chain.** A failed generation
+costs a proposal nobody sees; a failed promotion run costs a verdict. That asymmetry is why the two
+flows are separate networks (§2).
