@@ -186,3 +186,42 @@ def test_a_dispute_outranks_a_perfect_mutation_score():
                         [{"evidence": "docs say 15%, code scales by 0.9"}])
     assert cls == "disputed"
     assert "not safe to adopt" in why
+
+
+# ---------------------------------------------------------------- it is a finding about the CODE
+def test_a_contradicted_docstring_becomes_a_review_finding(tmp_path):
+    """11 §5: the reframing. A doc/code contradiction is a defect worth telling every reviewer
+    about, whether or not anybody asked for a generated test."""
+    from coded_tools.sentinel.report_publisher_tool import _synthesize
+
+    (tmp_path / "pricing.py").write_text(BUGGY, encoding="utf-8")
+    sly = {
+        "run_id": "t",
+        "repo_workspace": str(tmp_path),
+        "change_profile": {"files": [{
+            "path": "pricing.py", "language": "python", "change_type": "modified",
+            "functions_changed": [{"name": "loyalty_discount", "kind": "function",
+                                   "line_start": 1, "line_end": 5}]}]},
+    }
+    report = _synthesize(sly)
+    specs = [f for f in report["findings"] if f["category"] == "spec_implementation_mismatch"]
+    assert len(specs) == 1, report["findings"]
+    assert specs[0]["severity"] == "medium"
+    assert specs[0]["source"] == "tool", "deterministic, so it survives a drifting reviewer"
+    assert "15" in specs[0]["explanation"] and "0.9" in specs[0]["explanation"]
+    assert "stale" in specs[0]["explanation"], "it must not claim which side is wrong"
+
+
+def test_code_agreeing_with_its_docstring_produces_no_finding(tmp_path):
+    from coded_tools.sentinel.report_publisher_tool import _synthesize
+
+    (tmp_path / "pricing.py").write_text(BUGGY.replace("0.90", "0.85"), encoding="utf-8")
+    sly = {
+        "run_id": "t",
+        "repo_workspace": str(tmp_path),
+        "change_profile": {"files": [{
+            "path": "pricing.py", "language": "python", "change_type": "modified",
+            "functions_changed": [{"name": "loyalty_discount", "line_start": 1, "line_end": 5}]}]},
+    }
+    report = _synthesize(sly)
+    assert [f for f in report["findings"] if f["category"] == "spec_implementation_mismatch"] == []

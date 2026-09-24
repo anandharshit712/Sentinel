@@ -126,6 +126,15 @@ export interface TestProposal {
   status: 'proposed' | 'adopted' | 'discarded'
   evaluation: {
     reason?: string
+    // What KIND of test this is, and which witness vouched for it (11 §6). A bare "accepted"
+    // used to read as "correct" when it only meant "agrees with the implementation".
+    classification?: 'regression_guard' | 'change_documented' | 'characterization' | 'disputed' | 'rejected'
+    classification_reason?: string
+    oracle_evidence?: {
+      mutation?: { score?: number; caught?: number; total?: number; witness?: string }
+      differential?: { result?: string; reason?: string; base_passed?: boolean | null }
+      specification?: { mismatches?: { evidence?: string; caveat?: string }[] }
+    }
     caught?: { id: string; operator: string; description: string }[]
     missed?: { id: string; operator: string; description: string }[]
     mutants_total?: number

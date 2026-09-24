@@ -59,6 +59,54 @@ def _coverage(sly_data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
             "shards": shard_count, "unscanned_shards": unscanned}
 
 
+def _spec_mismatch_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Changed functions whose code contradicts their own docstring (11 §5).
+
+    This began as a check on generated tests and belongs here instead: a function documented as
+    15% that applies 10% is a defect in the CODE, worth telling every reviewer about, whether or
+    not anyone asked for a test. It also explains a whole class of surprising test failures — a
+    test generated from such a function silently takes the code's side.
+
+    Static, deterministic, and it never claims which side is wrong; the docstring may be the stale
+    one. Severity `medium`: a contradiction between code and documentation is real but is not, on
+    its own, evidence of a runtime fault.
+    """
+    profile = sly_data.get("change_profile") or sly_data.get("change_profile_wip") or {}
+    repo = sly_data.get("repo_workspace")
+    if not repo:
+        return []
+    from lib import spec_check
+
+    out: List[Dict[str, Any]] = []
+    for f in profile.get("files", []) or []:
+        path = f.get("path", "")
+        if f.get("language") != "python" or f.get("change_type") == "deleted":
+            continue
+        try:
+            with open(os.path.join(repo, path.replace("/", os.sep)), encoding="utf-8",
+                      errors="replace") as fh:
+                source = fh.read()
+        except OSError:
+            continue
+        for fn in f.get("functions_changed", []) or []:
+            for m in spec_check.check_function(source, fn.get("name", "")):
+                out.append({
+                    "id": f"SPEC-{path}:{fn.get('name')}",
+                    "category": "spec_implementation_mismatch",
+                    "severity": "medium",
+                    "file": path,
+                    "line_start": fn.get("line_start"),
+                    "line_end": fn.get("line_end"),
+                    "title": f"{fn.get('name')} contradicts its own docstring",
+                    "explanation": f"{m['evidence']}. {m['caveat']}",
+                    "fix_suggestion": ("Decide which is right and correct the other. Until then a "
+                                       "generated or hand-written test will encode whichever "
+                                       "behaviour the code currently has."),
+                    "source": "tool",
+                })
+    return out
+
+
 def _floor_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Deterministic detection floor: re-scan the whole diff IN CODE, for every review dimension.
 
@@ -85,6 +133,10 @@ def _floor_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
                 out.extend(res.get("findings", []))
         except Exception:   # a floor that cannot run must not blank the ones that can
             continue
+    try:
+        out.extend(_spec_mismatch_findings(sly_data))
+    except Exception:
+        pass
     return out
 
 

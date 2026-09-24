@@ -248,12 +248,31 @@ function GeneratedTestsCard({ runId, gaps, proposals, onChanged }: {
           const ev = p.evaluation || {}
           const caught = (ev.caught || []).length
           const total = ev.mutants_total ?? 0
-          const good = p.verdict === 'accepted'
+          // The classification is the headline, not the mutation score: a score of 1.00 on a test
+          // that agrees with a contradicted implementation is exactly the old overclaim (11 §1).
+          const cls = ev.classification
+          const disputed = cls === 'disputed'
+          const good = !disputed && p.verdict === 'accepted'
+          const oracle = ev.oracle_evidence || {}
+          const CLS_LABEL: Record<string, string> = {
+            regression_guard: 'locks existing behaviour',
+            change_documented: 'documents a behaviour change',
+            characterization: 'describes current behaviour — unverified',
+            disputed: 'code contradicts its documentation',
+            rejected: 'rejected',
+          }
           return (
-            <div key={p.id} className={`rounded-sm border p-2 ${good ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-(--line)'}`}>
+            <div key={p.id} className={`rounded-sm border p-2 ${
+              disputed ? 'border-amber-500/40 bg-amber-500/5'
+              : good ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-(--line)'}`}>
               <div className="flex flex-wrap items-center gap-2 text-[11px]">
                 <span className={`rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
-                  good ? 'border-emerald-500/40 text-emerald-300' : 'border-slate-500/40 text-slate-300'}`}>{p.verdict}</span>
+                  disputed ? 'border-amber-500/50 text-amber-300'
+                  : good ? 'border-emerald-500/40 text-emerald-300'
+                  : 'border-slate-500/40 text-slate-300'}`}>{(cls || p.verdict).replace(/_/g, ' ')}</span>
+                {cls && CLS_LABEL[cls] && (
+                  <span className="text-(--ink-dim)">{CLS_LABEL[cls]}</span>
+                )}
                 <code className="text-(--ink)">{p.target_file}::{p.target_function}</code>
                 {/* the evidence, not an opinion: injected bugs caught out of injected bugs tried */}
                 <span className="text-(--ink-dim)">caught {caught}/{total} injected bugs</span>
@@ -263,6 +282,19 @@ function GeneratedTestsCard({ runId, gaps, proposals, onChanged }: {
                 <span className={`ml-auto text-[10px] uppercase tracking-wider ${
                   p.status === 'adopted' ? 'text-emerald-300'
                   : p.status === 'discarded' ? 'text-(--ink-dim)' : 'text-amber-300'}`}>{p.status}</span>
+              </div>
+              {ev.classification_reason && (
+                <p className="mt-1 text-[11px] text-(--ink)">{ev.classification_reason}</p>
+              )}
+              {/* Each tier states its own witness, so a reviewer can see what was NOT checked. */}
+              <div className="mt-1 space-y-0.5 text-[11px] text-(--ink-dim)">
+                {oracle.differential?.result && (
+                  <p>differential: {oracle.differential.result.replace(/_/g, ' ')}</p>
+                )}
+                {(oracle.specification?.mismatches || []).map((m, j) => (
+                  <p key={j} className="text-amber-300/80">specification: {m.evidence}</p>
+                ))}
+                {oracle.mutation?.witness && <p>mutation: {oracle.mutation.witness}</p>}
               </div>
               {ev.reason && <p className="mt-1 text-[11px] text-(--ink-dim)">{ev.reason}</p>}
               {(ev.missed || []).length > 0 && (
@@ -277,7 +309,13 @@ function GeneratedTestsCard({ runId, gaps, proposals, onChanged }: {
               {open === p.id && (
                 <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-sm border border-(--line) bg-(--bg-2) p-2 text-[11px] text-(--ink)">{p.test_source}</pre>
               )}
-              {p.status === 'proposed' && (
+              {p.status === 'proposed' && disputed && (
+                <p className="mt-2 text-[11px] text-amber-300">
+                  Not adoptable while the code and its documentation disagree — resolve that first;
+                  the mismatch is reported as a finding on this run.
+                </p>
+              )}
+              {p.status === 'proposed' && !disputed && (
                 <RoleGate need="approver">
                   <div className="mt-2 flex gap-2">
                     <button onClick={() => act(p.id, 'adopt')}

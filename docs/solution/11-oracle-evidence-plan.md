@@ -1,6 +1,6 @@
 # 11 — Oracle Evidence: fixing the regression-lock gap in test generation
 
-**Status:** planning → in progress · **Started:** 2026-09-24 · **Author:** Harshit Anand
+**Status:** O1–O4 + O6 built · **Started:** 2026-09-24 · **Updated:** 2026-09-25 · **Author:** Harshit Anand
 
 Follows [09](09-test-generation-plan.md) (test generation) and [10](10-learning-loop-plan.md).
 This document exists because Phase 3 shipped with a hole in its central claim, and the hole is
@@ -113,13 +113,13 @@ is findings, not artifacts.
 
 | # | Item | Detail | Test |
 |---|---|---|---|
-| **O1** | `lib/differential.py` | Run a test against a `git worktree` of `base_sha` and against head; classify unchanged / changed / new. No model, no network | a test over unchanged code passes both; over changed code passes head and fails base; a missing target reports `new_code` |
-| **O2** | Tier 0 labelling | `test_proposal` gains `classification` + `oracle_evidence`; evaluator stops returning a bare `accepted` | a proposal with only a mutation score classifies as `characterization`, never as verified |
-| **O3** | Evaluator integration | `test_evaluator` calls O1 when a base SHA is available and merges the evidence | evidence present on a live run; absent base degrades gracefully |
-| **O4** | `lib/properties.py` (Tier 3) | Deterministic invariants from signature/docstring: numeric bounds, idempotence, type preservation, no-exception-on-valid-input | a discount exceeding the total is flagged; a benign function is not |
-| **O5** | Blind oracle agent (Tier 2) | One agent in `sentinel_testgen`, given signature + docstring + PR text and **never the body**; returns its own expected values | given a mismatching docstring it disputes; given agreement it confirms |
-| **O6** | `spec_implementation_mismatch` finding | Disputes flow into `review_report` through the existing floor mechanism | a disputed proposal produces a finding at `medium`+ |
-| **O7** | Dashboard + `verify_o.py` | Evidence shown per tier; the demo fixture in §1 must end as `disputed`, not `accepted` | 3/3, and the §1 case is caught |
+| **O1** ✅ | `lib/differential.py` | Run a test against a `git worktree` of `base_sha` and against head; classify unchanged / changed / new. No model, no network | a test over unchanged code passes both; over changed code passes head and fails base; a missing target reports `new_code` |
+| **O2** ✅ | Tier 0 labelling | `test_proposal` gains `classification` + `oracle_evidence`; evaluator stops returning a bare `accepted` | a proposal with only a mutation score classifies as `characterization`, never as verified |
+| **O3** ✅ | Evaluator integration | `test_evaluator` calls O1 when a base SHA is available and merges the evidence | evidence present on a live run; absent base degrades gracefully |
+| **O4** ✅ | `lib/spec_check.py` (Tier 3) | Built as a *documented-rate* check rather than general invariants: a docstring stating 15% implies a multiplier of 0.85, so a function scaling by 0.90 contradicts its own documentation. Static, no execution. Broader invariants (bounds, idempotence) deferred — this one covers the demonstrated failure and has a far lower false-positive surface | the §1 case is caught; correct code, a fee, a direct rate and an undocumented function are all silent |
+| **O5** | Blind oracle agent (Tier 2) | ⬜ **not built.** One agent in `sentinel_testgen`, given signature + docstring + PR text and **never the body**; returns its own expected values. `lib/intent.py` already assembles and redacts its input, so what remains is the agent itself | given a mismatching docstring it disputes; given agreement it confirms |
+| **O6** ✅ | `spec_implementation_mismatch` finding | Disputes flow into `review_report` through the existing floor mechanism | a disputed proposal produces a finding at `medium`+ |
+| **O7** ⚠️ | Dashboard done; `verify_o.py` not written | Evidence shown per tier; the demo fixture in §1 must end as `disputed`, not `accepted` | 3/3, and the §1 case is caught |
 
 ## 8. Build order and why
 
@@ -138,3 +138,31 @@ What this design fixes permanently is narrower and real: **the system stops pres
 agrees with the code" as "the test is correct", and surfaces every disagreement it can detect
 instead of silently resolving it in the code's favour.** That is a property of the design rather
 than a capability of a model, which is why it holds.
+
+
+---
+
+## 10. Built so far — 2026-09-25
+
+| | |
+|---|---|
+| **Tier 1 differential** | `lib/differential.py`; base worktree, never mutates the run workspace; unchanged / changed / new_code / unknown |
+| **Tier 3 specification** | `lib/spec_check.py`; static rate check, no model, no execution |
+| **Tier 2 input** | `lib/intent.py`; assembles signature, docstring, types, PR text, call sites — and **redacts the body**, with a test that fails if redaction ever leaks the implementation |
+| **Classification** | replaces the bare verdict everywhere: `regression_guard`, `change_documented`, `characterization`, `disputed`, `rejected` |
+| **Finding** | a contradiction is reported on *every* run through `report_publisher`'s deterministic floor, not only when a test was requested |
+| **Dashboard** | the classification leads, each tier states its witness, and a `disputed` proposal offers no Adopt button |
+
+**The demonstrated case, before and after:**
+
+```
+before   accepted · mutation score 0.83 · adoptable as a verified test
+after    disputed · "the docstring states 15%, which implies a multiplier of 0.85,
+                     but loyalty_discount scales by 0.9" · not adoptable
+                   · reported as a medium finding on the run
+```
+
+**Still open:** O5, the blind oracle — the general case, for functions whose documentation states
+intent in prose rather than a number. Its input pipeline exists; only the agent is missing. Until
+then Tier 3 covers the numeric-claim subset deterministically, which is the commonest form and the
+only one that can be checked without a model.
