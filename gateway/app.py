@@ -38,7 +38,7 @@ from gateway import settings
 
 logger = logging.getLogger("gateway")
 from gateway.invoker.neuro_san_client import invoke_network
-from lib import workspace
+from lib import calibration, workspace
 from lib.redact import redact
 
 app = FastAPI(title="Sentinel Delivery Gateway", version="1")
@@ -482,6 +482,49 @@ async def stop(run_id: str, _role: str = Depends(_require("approver"))) -> dict:
 @app.get("/api/v1/approvals")
 def approvals(status: str = "pending", _role: str = Depends(_require("viewer"))) -> dict:
     return {"approvals": dao.list_approvals(status)}
+
+
+class OutcomeBody(BaseModel):
+    outcome: str                 # reverted | incident | clean | generated_test_caught_bug
+    note: str | None = None
+    proposal_id: int | None = None   # for generated_test_caught_bug
+
+
+_OUTCOMES = ("reverted", "incident", "clean", "generated_test_caught_bug")
+
+
+@app.post("/api/v1/runs/{run_id}/outcome", status_code=201)
+def record_outcome(run_id: str, body: OutcomeBody,
+                   role: str = Depends(_require("approver"))) -> dict:
+    """What happened after the decision (10 §2).
+
+    This is the only evidence that settles whether a gate decision was right, and it can only come
+    from outside the system — nothing here can observe a revert or an incident on its own.
+    """
+    if body.outcome not in _OUTCOMES:
+        raise HTTPException(400, f"outcome must be one of {list(_OUTCOMES)}")
+    if not dao.get_run(run_id):
+        raise HTTPException(404, "run not found")
+    payload = {"note": body.note, "recorded_by": role}
+    if body.proposal_id is not None:
+        payload["proposal_id"] = body.proposal_id
+    oid = dao.record_outcome(run_id, body.outcome, payload)
+    dao.record_audit(run_id, actor=role, action=f"outcome_{body.outcome}", payload=payload)
+    return {"outcome_id": oid, "run_id": run_id, "outcome": body.outcome}
+
+
+@app.get("/api/v1/calibration")
+def calibration_report(_role: str = Depends(_require("viewer"))) -> dict:
+    """Was the gate right? Rates per band with their sample sizes, plus recommendations.
+
+    Nothing here changes a threshold — the payload says so itself (`applies_changes: false`).
+    """
+    return calibration.report(
+        dao.list_decisions_with_band(),
+        dao.list_outcomes(),
+        dao.list_all_approvals(),
+        dao.list_test_proposals(limit=1000),
+    )
 
 
 class ProposalAction(BaseModel):

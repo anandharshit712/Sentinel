@@ -5,6 +5,7 @@ import {
   useRuns, useApprovals, useAudit,
 } from './lib'
 import RunDetailRoute, { RunDetailPane, ApprovalControls } from './RunDetail'
+import { Calibration } from './Calibration'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
             <Route path="/runs/:id" element={<RunDetailRoute />} />
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/audit" element={<Audit />} />
+            <Route path="/calibration" element={<Calibration />} />
           </Routes>
         </Shell>
       </Gate>
@@ -82,6 +84,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         <NavLink to="/" end className={nav}>Runs</NavLink>
         <NavLink to="/approvals" className={nav}>Approvals</NavLink>
         <NavLink to="/audit" className={nav}>Audit</NavLink>
+        <NavLink to="/calibration" className={nav}>Calibration</NavLink>
         <span className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-(--ink-dim)">
           <span className="hidden items-center gap-1.5 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-(--signal)" style={{ animation: 'blink 1.4s steps(2) infinite' }} />system live

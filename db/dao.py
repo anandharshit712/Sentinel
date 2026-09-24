@@ -242,6 +242,45 @@ def set_proposal_status(proposal_id: int, status: str) -> bool:
     return r.rowcount > 0
 
 
+def record_outcome(run_id: str | None, outcome_type: str, payload: dict | None = None) -> int:
+    """What happened AFTER a decision (10 §2) — the only evidence that settles whether it was right."""
+    with get_engine().begin() as c:
+        row = c.execute(models.outcomes.insert().returning(models.outcomes.c.id),
+                        {"run_id": run_id, "outcome_type": outcome_type,
+                         "payload": payload or {}}).first()
+    return int(row[0])
+
+
+def list_outcomes(run_id: str | None = None, limit: int = 1000) -> list[dict]:
+    q = models.outcomes.select().order_by(models.outcomes.c.recorded_at.desc()).limit(limit)
+    if run_id:
+        q = q.where(models.outcomes.c.run_id == run_id)
+    with get_engine().begin() as c:
+        return [dict(r) for r in c.execute(q).mappings()]
+
+
+def list_decisions_with_band(limit: int = 5000) -> list[dict]:
+    """Decisions joined to their risk band — calibration is per band, and the band lives on
+    risk_scores while the verdict lives on decisions."""
+    j = (models.decisions
+         .join(models.risk_scores, models.decisions.c.run_id == models.risk_scores.c.run_id,
+               isouter=True)
+         .join(models.runs, models.decisions.c.run_id == models.runs.c.run_id, isouter=True))
+    q = (select(models.decisions.c.run_id, models.decisions.c.decision,
+                models.decisions.c.rule_fired, models.decisions.c.created_at,
+                models.risk_scores.c.band, models.risk_scores.c.score,
+                models.runs.c.repo)
+         .select_from(j).order_by(models.decisions.c.created_at.desc()).limit(limit))
+    with get_engine().begin() as c:
+        return [dict(r) for r in c.execute(q).mappings()]
+
+
+def list_all_approvals(limit: int = 5000) -> list[dict]:
+    q = models.approvals.select().order_by(models.approvals.c.created_at.desc()).limit(limit)
+    with get_engine().begin() as c:
+        return [dict(r) for r in c.execute(q).mappings()]
+
+
 def list_audit(run_id: str | None = None, limit: int = 200) -> list[dict]:
     e = models.audit_events
     q = select(e).order_by(e.c.at.desc()).limit(limit)

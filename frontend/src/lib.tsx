@@ -98,6 +98,7 @@ export const useRuns = (qs: string) => useFetch<{ runs: RunRow[] }>(`/api/v1/run
 export const useRun = (id: string) => useFetch<RunDetail>(id ? `/api/v1/runs/${id}` : null, [id])
 export const useApprovals = (status = 'pending') =>
   useFetch<{ approvals: Approval[] }>(`/api/v1/approvals?status=${status}`, [status])
+export const useCalibration = () => useFetch<any>('/api/v1/calibration', [])
 export const useAudit = (runId?: string) =>
   useFetch<{ events: AuditEvent[] }>(`/api/v1/audit${runId ? `?run_id=${runId}` : ''}`, [runId])
 

@@ -113,3 +113,58 @@ def test_report_states_in_the_data_that_it_changes_nothing():
     """10 §1: this loop recommends, it never re-tunes the gate. The data says so itself, so a
     consumer cannot present it as an applied change."""
     assert calibration.report([], [], [], [])["applies_changes"] is False
+
+
+# ---------------------------------------------------------------- recommendations (advice only)
+def _report(decisions, outcomes=(), approvals=(), proposals=()):
+    return calibration.report(list(decisions), list(outcomes), list(approvals), list(proposals))
+
+
+def test_a_gate_humans_keep_overriding_is_flagged_as_possibly_too_strict():
+    decisions = [{"run_id": f"h{i}", "decision": "escalate", "band": "high"} for i in range(10)]
+    approvals = [{"run_id": f"h{i}", "status": "approved"} for i in range(9)] + \
+                [{"run_id": "h9", "status": "rejected"}]
+    recs = _report(decisions, approvals=approvals)["recommendations"]
+    strict = [r for r in recs if r["kind"] == "possibly_too_strict"]
+    assert len(strict) == 1 and strict[0]["band"] == "high"
+    assert "9 of 10" in strict[0]["evidence"]
+    assert strict[0]["applied"] is False
+
+
+def test_promotions_that_keep_going_wrong_are_flagged_as_possibly_too_loose():
+    decisions = [{"run_id": f"p{i}", "decision": "promote", "band": "medium"} for i in range(10)]
+    outcomes = ([{"run_id": f"p{i}", "outcome_type": "reverted"} for i in range(3)]
+                + [{"run_id": f"p{i}", "outcome_type": "clean"} for i in range(3, 10)])
+    recs = _report(decisions, outcomes=outcomes)["recommendations"]
+    loose = [r for r in recs if r["kind"] == "possibly_too_loose"]
+    assert len(loose) == 1 and loose[0]["band"] == "medium"
+    assert "3 of 10" in loose[0]["evidence"]
+
+
+def test_thin_data_produces_no_recommendation_at_all():
+    """The failure mode that matters: confident advice from four data points."""
+    decisions = [{"run_id": f"h{i}", "decision": "escalate", "band": "high"} for i in range(4)]
+    approvals = [{"run_id": f"h{i}", "status": "approved"} for i in range(4)]
+    assert _report(decisions, approvals=approvals)["recommendations"] == []
+
+
+def test_every_recommendation_carries_its_caveat_and_confidence():
+    decisions = [{"run_id": f"h{i}", "decision": "escalate", "band": "high"} for i in range(10)]
+    approvals = [{"run_id": f"h{i}", "status": "approved"} for i in range(10)]
+    for r in _report(decisions, approvals=approvals)["recommendations"]:
+        assert r["caveat"] and r["confidence"] in ("low", "moderate")
+        assert "config/risk.yaml" in r["suggestion"], "it must name where a human would change it"
+
+
+def test_nothing_in_the_loop_writes_configuration():
+    """10 §1, asserted rather than promised: the module must not touch config at all."""
+    import inspect
+
+    src = inspect.getsource(calibration)
+    for forbidden in ("open(", "write_text", "yaml.dump", "Path("):
+        assert forbidden not in src, f"calibration must not perform I/O; found {forbidden!r}"
+    assert all(r["applied"] is False
+               for r in _report([{"run_id": f"h{i}", "decision": "escalate", "band": "high"}
+                                 for i in range(10)],
+                                approvals=[{"run_id": f"h{i}", "status": "approved"}
+                                           for i in range(10)])["recommendations"])

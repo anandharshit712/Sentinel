@@ -72,12 +72,37 @@ never read.
 - **No ML model.** The data is tens to hundreds of runs. Rates with sample sizes are honest at that
   volume; a learned model would be a confident-looking way of overfitting a demo.
 
-## 5. Exit criteria
+## 5. Exit criteria — met 2026-09-24
 
-- [ ] Outcomes can be recorded for a run and for an adopted test, and are read back.
-- [ ] Calibration statistics computed from real rows, every figure carrying its sample size.
-- [ ] A seeded pattern produces the matching recommendation; thin data produces none.
-- [ ] The Calibration screen renders on an **empty** database — a fresh install has no history and
-      must not look broken.
-- [ ] Nothing in the loop writes to `config/` or changes a threshold. Asserted by a test.
-- [ ] `verify_b4`, `verify_p2` still pass; decision rate unchanged.
+- [x] Outcomes can be recorded for a run and for an adopted test, and are read back
+      (`POST /api/v1/runs/{id}/outcome`, `dao.record_outcome` / `list_outcomes`).
+- [x] Calibration statistics computed from real rows, every figure carrying its sample size.
+- [x] A seeded pattern produces the matching recommendation; thin data produces none.
+      `verify_p4.py`: **12/12 checks pass** — 3 of 10 promotions at `medium` bad → 30% → flagged
+      too loose; 9 of 10 escalations at `high` approved → 90% → flagged too strict; 3 observations
+      → no rate and no recommendation.
+- [x] The Calibration screen renders on an **empty** database (it explains what to do instead of
+      showing empty tables) and on a seeded one. Verified in a browser.
+- [x] Nothing in the loop writes to `config/` or changes a threshold — asserted by a test that
+      greps the module for I/O, and carried in the payload itself as `applies_changes: false`.
+- [x] `verify_b4`, `verify_p2` still pass; the promotion chain is untouched by this phase.
+
+### What the first real report said
+
+Run against this project's own history (77 decisions across 8 repos, real and fixture), the loop
+produced three recommendations, all "possibly too strict" or "possibly too loose", all at moderate
+confidence, none applied. Two observations worth keeping:
+
+- **The evidence is mostly this project testing itself.** The report names the repos it read for
+  exactly this reason: a gate recommendation derived from verification runs is a check that the
+  machinery works, not advice about a real gate. Provenance is printed before any rate.
+- **`unknown` outcome counts dominate.** 21 of 21 low-band promotions have no recorded outcome,
+  because nothing has been recording them until now. The loop says so rather than treating silence
+  as success — which is the single assumption that would make any gate look permanently correct.
+
+### The limit that does not go away
+
+The gate's false positives are unobservable. A change that was blocked never reveals what it would
+have done, so no amount of history can prove a threshold is too strict — only that humans keep
+overriding it. Every "possibly too strict" recommendation carries that sentence with it, so the
+number cannot be quoted without the caveat.

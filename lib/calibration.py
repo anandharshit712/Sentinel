@@ -144,6 +144,73 @@ def generated_test_calibration(proposals: Iterable[Dict[str, Any]],
     return out
 
 
+# Thresholds for RAISING A CONCERN, not for acting on one. Deliberately conservative: a
+# recommendation a person ignores costs nothing, one they act on wrongly costs a gate.
+APPROVAL_RATE_TOO_STRICT = 0.8    # humans wave through 4 of 5 gated changes at this band
+BAD_RATE_TOO_LOOSE = 0.2          # 1 in 5 promotions at this band went bad
+
+
+def recommendations(promo: Dict[str, Any], esc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Arguments about the gate's thresholds, with their evidence attached.
+
+    These are NEVER applied (10 §1). A release gate that silently re-tunes itself has no stable
+    meaning, and outcome data on rare failures drifts towards "promote more" long before it has
+    the evidence to justify it. Each item names what to change, what it saw, and how confident
+    that makes it — so a person can disagree with the reasoning, not just the conclusion.
+    """
+    out: List[Dict[str, Any]] = []
+
+    for band, c in esc.items():
+        r = c["approval_rate"]
+        if r["insufficient_data"] or r["rate"] is None:
+            continue
+        if r["rate"] >= APPROVAL_RATE_TOO_STRICT:
+            out.append({
+                "kind": "possibly_too_strict",
+                "band": band,
+                "evidence": f"{c['approved']} of {r['n']} resolved escalations at band {band} were "
+                            f"approved unchanged ({r['rate']:.0%})",
+                "suggestion": f"Consider raising the escalation threshold for band {band} in "
+                              f"config/risk.yaml, or check whether these changes share a trait the "
+                              f"formula over-weights.",
+                # The honest caveat, carried WITH the recommendation so it cannot be quoted without
+                # it: an approval is not proof the change was safe.
+                "caveat": "An approval means a human accepted the risk, not that the change was "
+                          "safe. Blocked changes never reveal what they would have done, so this "
+                          "cannot prove the gate was wrong.",
+                "confidence": "low" if r["n"] < 10 else "moderate",
+                "applied": False,
+            })
+
+    for band, c in promo.items():
+        r = c["bad_rate"]
+        if r["insufficient_data"] or r["rate"] is None:
+            continue
+        if r["rate"] >= BAD_RATE_TOO_LOOSE:
+            out.append({
+                "kind": "possibly_too_loose",
+                "band": band,
+                "evidence": f"{c['bad']} of {r['n']} promotions at band {band} were reverted or "
+                            f"followed by an incident ({r['rate']:.0%})",
+                "suggestion": f"Consider lowering the auto-promote threshold for band {band} in "
+                              f"config/risk.yaml so these changes require review.",
+                "caveat": f"{c['unknown']} promotion(s) at this band have no recorded outcome; the "
+                          f"true rate could be higher or lower.",
+                "confidence": "low" if r["n"] < 10 else "moderate",
+                "applied": False,
+            })
+
+    return out
+
+
+def _repo_counts(decisions: Iterable[Dict[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for d in decisions:
+        repo = d.get("repo") or "unknown"
+        out[repo] = out.get(repo, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 def report(decisions: List[Dict[str, Any]], outcomes: List[Dict[str, Any]],
            approvals: List[Dict[str, Any]], proposals: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The whole picture. Safe on empty inputs — a fresh install has no history and must not
@@ -160,9 +227,14 @@ def report(decisions: List[Dict[str, Any]], outcomes: List[Dict[str, Any]],
             "outcomes_recorded": len(list(outcomes)),
             "proposals": sum(c["proposed"] for c in tests.values()),
         },
+        # Where the evidence came from. A gate recommendation derived entirely from demo or
+        # verification runs is not a finding about production, and the only way a reader can tell
+        # is if the report says whose history it read.
+        "repos": _repo_counts(decisions),
         "promotion_by_band": promo,
         "escalation_by_band": esc,
         "generated_tests": tests,
+        "recommendations": recommendations(promo, esc),
         "min_sample": MIN_SAMPLE,
         "settling_days": SETTLING_DAYS,
         # Said in the data itself, not only in the UI: nothing here has changed a threshold.
