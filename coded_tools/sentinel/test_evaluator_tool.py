@@ -31,7 +31,8 @@ import time
 from typing import Any, Dict, List, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
-from lib import mutate
+from lib import differential as differential_mod
+from lib import mutate, spec_check
 
 logger = logging.getLogger("coded_tools.test_evaluator")
 
@@ -74,6 +75,46 @@ def _run_pytest(repo: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tup
     return r.returncode == 0, out[-400:]
 
 
+def classify(mutation_ok: bool, differential: Dict[str, Any] | None,
+             spec_mismatches: List[Dict[str, Any]] | None = None) -> tuple[str, str]:
+    """What this test is, and what evidence says so (11 §6).
+
+    `accepted` used to mean "the test agrees with the implementation", which reads as "the test is
+    correct" and is exactly the overclaim that let a test asserting a bug pass with 0.83. A
+    classification names the witness instead:
+
+      regression_guard  the behaviour predates this change, so the test cannot have encoded a bug
+                        this change introduced
+      change_documented the test asserts behaviour this change altered — real evidence about the
+                        change, and the point at which intent (Tier 2) decides whether it is right
+      characterization  nothing independent of the implementation vouched for it. Adoptable, but
+                        it locks in current behaviour, bugs included, and says so
+    """
+    # A dispute outranks everything, including a perfect mutation score. If the code and its
+    # documentation disagree, a test generated from the code takes the code's side by construction —
+    # which is the failure this whole design exists to stop. It is also a finding about the CODE,
+    # not merely a reason to discard a test (11 §5).
+    if spec_mismatches:
+        m = spec_mismatches[0]
+        return "disputed", (f"{m['evidence']}. A test written from the implementation would assert "
+                            f"the implemented behaviour, so it is not safe to adopt until a human "
+                            f"says which side is right")
+    if not mutation_ok:
+        return "rejected", "the test does not detect enough injected bugs to be worth keeping"
+    result = (differential or {}).get("result")
+    if result == differential_mod.UNCHANGED:
+        return "regression_guard", ("locks behaviour that predates this change — it cannot encode a "
+                                    "bug this change introduced")
+    if result == differential_mod.CHANGED:
+        return "change_documented", ("asserts behaviour this change altered; whether that change "
+                                     "was intended is a question for the author")
+    if result == differential_mod.NEW_CODE:
+        return "characterization", ("new code, so there is no earlier behaviour to compare with — "
+                                    "this describes what the code does today, not what it should do")
+    return "characterization", ("no independent witness: this describes what the code does today, "
+                                "bugs included, not what it should do")
+
+
 class TestEvaluatorTool(CodedTool):
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         run_id = sly_data.get("run_id", "?")
@@ -89,9 +130,11 @@ class TestEvaluatorTool(CodedTool):
                 return "Error: target_file, function, test_source and a repo workspace are required"
 
             if is_tautology(test_source):
-                return {"verdict": "rejected", "reason": "tautological: no assertion depends on "
-                                                         "the code under test",
-                        "mutation_score": 0.0, "caught": [], "missed": [], "mutants_total": 0}
+                return {"verdict": "rejected", "classification": "rejected",
+                        "classification_reason": "asserts nothing about the code under test",
+                        "reason": "tautological: no assertion depends on the code under test",
+                        "mutation_score": 0.0, "caught": [], "missed": [], "mutants_total": 0,
+                        "oracle_evidence": {}}
 
             # Work on a copy: nothing here may touch the run workspace or the source repo.
             sandbox = tempfile.mkdtemp(prefix="sentinel-eval-")
@@ -114,11 +157,12 @@ class TestEvaluatorTool(CodedTool):
             # ---- 1. must pass on correct code -------------------------------------------
             passed, tail = _run_pytest(repo, test_path)
             if not passed:
-                return {"verdict": "rejected",
+                return {"verdict": "rejected", "classification": "rejected",
+                        "classification_reason": "red against unmodified code",
                         "reason": "fails against unmodified code — a test that is red on correct "
                                   "code is worse than no test",
                         "mutation_score": 0.0, "caught": [], "missed": [], "mutants_total": 0,
-                        "output": tail}
+                        "oracle_evidence": {}, "output": tail}
 
             # ---- 2. mutation campaign ----------------------------------------------------
             mutants = mutate.generate(original, function, limit=MAX_MUTANTS)
@@ -147,9 +191,39 @@ class TestEvaluatorTool(CodedTool):
                 verdict, reason = "rejected", (f"caught only {len(caught)} of {total} injected bugs "
                                                f"(threshold {min_score})")
 
-            logger.info("run %s: test_evaluator %s -> %s (score %.2f, %d mutants, %.1fs)",
-                        run_id, function, verdict, score, total, elapsed)
-            return {"verdict": verdict, "reason": reason, "mutation_score": score,
+            # ---- 3. the second witness: what did this change actually alter? (11 §4) ----
+            # Deterministic, no model, and it runs on the ORIGINAL workspace (which still has git
+            # history) rather than the sandbox copy, whose .git was deliberately not copied.
+            base_sha = (args.get("base_sha")
+                        or ((sly_data.get("event") or {}).get("change") or {}).get("base_sha"))
+            diff_evidence = differential_mod.compare(
+                workspace, base_sha or "", target_file, function, test_path, test_source,
+                head_passed=True) if base_sha else {
+                    "tier": "differential", "result": differential_mod.UNKNOWN,
+                    "reason": "no base commit supplied for this run"}
+
+            # ---- 4. does the code agree with its own documentation? (11 §3 Tier 3) ----
+            # Static and deterministic: it reads the docstring's stated rate and the constants the
+            # function scales by. Cheap enough to always run, and it needs no provider.
+            spec_mismatches = spec_check.check_function(original, function)
+
+            classification, class_reason = classify(verdict == "accepted", diff_evidence,
+                                                    spec_mismatches)
+            oracle_evidence = {
+                "mutation": {"tier": "mutation", "score": score, "caught": len(caught),
+                             "total": total, "threshold": min_score,
+                             "witness": "the implementation itself — sensitivity, not correctness"},
+                "differential": diff_evidence,
+                "specification": {"tier": "specification", "mismatches": spec_mismatches,
+                                  "witness": "the docstring's stated intent",
+                                  "checked": bool(spec_mismatches) or True},
+            }
+
+            logger.info("run %s: test_evaluator %s -> %s / %s (score %.2f, %d mutants, %.1fs)",
+                        run_id, function, verdict, classification, score, total, elapsed)
+            return {"verdict": verdict, "classification": classification,
+                    "classification_reason": class_reason, "oracle_evidence": oracle_evidence,
+                    "reason": reason, "mutation_score": score,
                     "caught": caught, "missed": missed, "mutants_total": total,
                     "duration_seconds": elapsed, "threshold": min_score}
         except Exception as e:
