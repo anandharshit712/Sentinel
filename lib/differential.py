@@ -32,6 +32,8 @@ import sys
 import tempfile
 from typing import Any, Dict, Optional
 
+from lib.pyexec import fresh_import_env
+
 logger = logging.getLogger("lib.differential")
 
 PER_RUN_TIMEOUT = 120
@@ -55,7 +57,8 @@ def _run_test(cwd: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tuple[
            "--no-header"]
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, check=False)
+                           errors="replace", timeout=timeout, check=False,
+                           env=fresh_import_env())
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-400:]

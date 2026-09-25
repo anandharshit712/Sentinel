@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Union
 from neuro_san.interfaces.coded_tool import CodedTool
 from lib import differential as differential_mod
 from lib import mutate, spec_check
+from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("coded_tools.test_evaluator")
 
@@ -67,8 +68,11 @@ def _run_pytest(repo: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tup
     cmd = [sys.executable, "-m", "pytest", test_rel, "-q", "-p", "no:cacheprovider",
            "-x", "--no-header"]
     try:
+        # fresh_import_env: mutants are size-preserving often enough that stale bytecode would
+        # silently record a live mutant as "missed" and deflate the score (lib/pyexec.py).
         r = subprocess.run(cmd, cwd=repo, capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, check=False)
+                           errors="replace", timeout=timeout, check=False,
+                           env=fresh_import_env())
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     out = (r.stdout or "") + (r.stderr or "")

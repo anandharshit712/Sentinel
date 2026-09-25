@@ -225,3 +225,73 @@ def test_code_agreeing_with_its_docstring_produces_no_finding(tmp_path):
     }
     report = _synthesize(sly)
     assert [f for f in report["findings"] if f["category"] == "spec_implementation_mismatch"] == []
+
+
+# ---------------------------------------------------------------- Tier 2: the blind oracle
+from coded_tools.sentinel.blind_oracle_tool import BlindOracleTool  # noqa: E402
+from lib.pyexec import fresh_import_env  # noqa: E402
+
+
+def test_pyexec_selfcheck():
+    from lib import pyexec
+    pyexec.demo()
+
+
+def test_a_rewritten_module_is_never_run_from_stale_bytecode(tmp_path):
+    """Python keys its bytecode cache on (mtime, size). A same-size edit inside one second — which
+    is exactly what a mutation campaign does — otherwise runs the code it just replaced, and the
+    mutant gets recorded as 'missed'."""
+    import subprocess
+    import sys
+
+    mod = tmp_path / "m.py"
+    mod.write_text("def f():\n    return 90.0\n", encoding="utf-8")
+    subprocess.run([sys.executable, "-c", "import m; print(m.f())"], cwd=str(tmp_path),
+                   capture_output=True, check=False)          # writes __pycache__
+    mod.write_text("def f():\n    return 85.0\n", encoding="utf-8")
+    r = subprocess.run([sys.executable, "-c", "import m; print(m.f())"], cwd=str(tmp_path),
+                       capture_output=True, text=True, check=False, env=fresh_import_env())
+    assert r.stdout.strip() == "85.0", "the fix must always execute the current source"
+
+
+def test_blind_oracle_selfcheck():
+    from coded_tools.sentinel import blind_oracle_tool
+    blind_oracle_tool.demo()
+
+
+def test_the_oracle_context_never_contains_the_implementation(tmp_path):
+    (tmp_path / "pricing.py").write_text(BUGGY, encoding="utf-8")
+    ctx = BlindOracleTool().invoke(
+        {"target_file": "pricing.py", "function": "loyalty_discount",
+         "repo_workspace": str(tmp_path)}, {})
+    assert "0.90" not in ctx["module_without_body"]
+    assert "years >= 3" not in ctx["module_without_body"]
+    assert "15%" in ctx["docstring"], "intent must survive — it is what gets compared"
+
+
+def test_an_expectation_from_the_docs_disputes_contradicted_code(tmp_path):
+    (tmp_path / "pricing.py").write_text(BUGGY, encoding="utf-8")
+    res = BlindOracleTool().invoke(
+        {"target_file": "pricing.py", "function": "loyalty_discount",
+         "repo_workspace": str(tmp_path),
+         "expectations": [{"args": [100.0, 3], "expected": 85.0, "because": "docstring says 15% off"}]}, {})
+    assert res["verdict"] == "disputed"
+    assert res["disagreements"][0]["actual"] == 90.0
+    assert "not which one is wrong" in res["caveat"]
+
+
+def test_code_matching_its_docs_confirms_intent(tmp_path):
+    (tmp_path / "pricing.py").write_text(BUGGY.replace("0.90", "0.85"), encoding="utf-8")
+    res = BlindOracleTool().invoke(
+        {"target_file": "pricing.py", "function": "loyalty_discount",
+         "repo_workspace": str(tmp_path),
+         "expectations": [{"args": [100.0, 3], "expected": 85.0}]}, {})
+    assert res["verdict"] == "confirms_intent"
+
+
+def test_nothing_documented_means_the_tier_stays_silent(tmp_path):
+    (tmp_path / "bare.py").write_text("def f(x):\n    return x * 3\n", encoding="utf-8")
+    ctx = BlindOracleTool().invoke(
+        {"target_file": "bare.py", "function": "f", "repo_workspace": str(tmp_path)}, {})
+    assert ctx["has_stated_intent"] is False
+    assert "nothing to compare" in ctx["reason"]

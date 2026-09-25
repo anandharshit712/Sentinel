@@ -1,6 +1,6 @@
 # 11 — Oracle Evidence: fixing the regression-lock gap in test generation
 
-**Status:** O1–O4 + O6 built · **Started:** 2026-09-24 · **Updated:** 2026-09-25 · **Author:** Harshit Anand
+**Status:** complete (O1–O7) · **Started:** 2026-09-24 · **Updated:** 2026-09-25 · **Author:** Harshit Anand
 
 Follows [09](09-test-generation-plan.md) (test generation) and [10](10-learning-loop-plan.md).
 This document exists because Phase 3 shipped with a hole in its central claim, and the hole is
@@ -117,9 +117,9 @@ is findings, not artifacts.
 | **O2** ✅ | Tier 0 labelling | `test_proposal` gains `classification` + `oracle_evidence`; evaluator stops returning a bare `accepted` | a proposal with only a mutation score classifies as `characterization`, never as verified |
 | **O3** ✅ | Evaluator integration | `test_evaluator` calls O1 when a base SHA is available and merges the evidence | evidence present on a live run; absent base degrades gracefully |
 | **O4** ✅ | `lib/spec_check.py` (Tier 3) | Built as a *documented-rate* check rather than general invariants: a docstring stating 15% implies a multiplier of 0.85, so a function scaling by 0.90 contradicts its own documentation. Static, no execution. Broader invariants (bounds, idempotence) deferred — this one covers the demonstrated failure and has a far lower false-positive surface | the §1 case is caught; correct code, a fee, a direct rate and an undocumented function are all silent |
-| **O5** | Blind oracle agent (Tier 2) | ⬜ **not built.** One agent in `sentinel_testgen`, given signature + docstring + PR text and **never the body**; returns its own expected values. `lib/intent.py` already assembles and redacts its input, so what remains is the agent itself | given a mismatching docstring it disputes; given agreement it confirms |
+| **O5** ✅ | Blind oracle agent (Tier 2) | `intent_oracle_agent` + `blind_oracle` tool in `sentinel_testgen`. A **separate agent** by necessity: the test author has already seen the implementation through `gap_context`, so it cannot be its own blind oracle. It reads intent, states expected cases, and the tool runs the real function against them — the model never grades itself | given a mismatching docstring it disputes; given agreement it confirms; given nothing documented it stays silent |
 | **O6** ✅ | `spec_implementation_mismatch` finding | Disputes flow into `review_report` through the existing floor mechanism | a disputed proposal produces a finding at `medium`+ |
-| **O7** ⚠️ | Dashboard done; `verify_o.py` not written | Evidence shown per tier; the demo fixture in §1 must end as `disputed`, not `accepted` | 3/3, and the §1 case is caught |
+| **O7** ✅ | Dashboard + `verify_o.py` | Evidence shown per tier; the demo fixture in §1 must end as `disputed`, not `accepted` | 3/3, and the §1 case is caught |
 
 ## 8. Build order and why
 
@@ -166,3 +166,34 @@ after    disputed · "the docstring states 15%, which implies a multiplier of 0.
 intent in prose rather than a number. Its input pipeline exists; only the agent is missing. Until
 then Tier 3 covers the numeric-claim subset deterministically, which is the commonest form and the
 only one that can be checked without a model.
+
+
+---
+
+## 11. Closed — 2026-09-25
+
+`scripts/verify_o.py`: **17/17**, no LLM and no network, so it runs on the days the provider cannot.
+173 unit tests pass.
+
+### A latent bug this work uncovered
+
+While building Tier 2 the "corrected" fixture kept returning the buggy value. Python keys its
+bytecode cache on **(mtime, size)**, so a same-length edit inside one second — `0.90` to `0.85`,
+`10` to `11` — runs the code it just replaced. Demonstrated directly: after rewriting a module the
+interpreter printed `90.0` when the file said `85.0`.
+
+**That is what a mutation campaign does**: write a one-character mutant, run the test, repeat, many
+times per second. A size-preserving mutant could silently never take effect, the test would pass,
+and the mutant would be recorded as **missed** — deflating the very score this system is built on.
+
+`lib/pyexec.fresh_import_env` now isolates the bytecode cache for every subprocess that runs code
+we just rewrote (mutation, differential, and the oracle probe). Re-measuring the discrimination
+table afterwards gave **1.00 / 0.25 / 0.12**, unchanged — so the earlier published numbers were
+sound and the bug was latent rather than actively corrupting them. It would not have stayed latent.
+
+### Framework fact
+
+An array parameter in a coded tool's schema **must declare `items`**, or neuro-san's pydantic
+conversion fails and the entire network is skipped at load with
+`pydantic model conversion failed - 'NoneType' object has no attribute 'get'` — a 404 on every
+request to it, not a startup error.
