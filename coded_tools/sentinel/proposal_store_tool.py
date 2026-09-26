@@ -42,11 +42,26 @@ class ProposalStoreTool(CodedTool):
             # Tier 2's verdict, from the agent that never saw the function body. A dispute
             # outranks any mutation score: a test written against code that contradicts its own
             # documentation asserts the code's side of that contradiction (11 §6).
-            intent_verdict = (args.get("intent_verdict") or "").strip().lower()
+            # The TOOL's own record wins. An agent that reports "confirms_intent" without the
+            # oracle ever having run a comparison is asserting evidence it does not have — which
+            # is what happened on every live run until 2026-09-26.
+            measured = sly_data.get("intent_result") or {}
+            claimed = (args.get("intent_verdict") or "").strip().lower()
+            intent_verdict = (measured.get("verdict") or "").strip().lower()
+            if not intent_verdict and claimed:
+                # Unmeasured: keep the claim visible but never let it drive a classification.
+                evaluation["intent_claimed_unverified"] = claimed
+                logger.warning("run %s: agent claimed intent verdict %r but the oracle never "
+                               "measured one — ignoring it", run_id, claimed)
+            if intent_verdict and claimed and intent_verdict != claimed:
+                evaluation["intent_claim_mismatch"] = {"claimed": claimed, "measured": intent_verdict}
+                logger.warning("run %s: agent claimed %r, the oracle measured %r — using the "
+                               "measurement", run_id, claimed, intent_verdict)
             if intent_verdict:
                 evaluation["intent_verdict"] = intent_verdict
                 evaluation.setdefault("oracle_evidence", {})["intent"] = {
-                    "tier": "blind_oracle", "verdict": intent_verdict,
+                    "tier": "blind_oracle", "verdict": intent_verdict, "measured": True,
+                    "cases_checked": measured.get("checked", 0),
                     "witness": "the documentation, read without sight of the implementation"}
                 if intent_verdict in ("disputed", "confirms_intent"):
                     from coded_tools.sentinel.test_evaluator_tool import classify

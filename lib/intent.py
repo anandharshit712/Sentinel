@@ -109,6 +109,26 @@ def call_sites(sources: Dict[str, str], function: str, limit: int = 5) -> List[D
     return out
 
 
+# An oracle with nothing to read will confabulate, and under this design a dispute outranks every
+# other tier — so a guess becomes a false alarm that blocks adoption AND raises a finding against
+# healthy code. Observed live on 2026-09-26: a fixture with no docstring and the one-word PR title
+# "coupon" produced `disputed` on one run of three and `confirms_intent` on the others, against
+# code that was correct. Thin intent must read as NO intent.
+MIN_DOCSTRING_CHARS = 20
+MIN_DESCRIPTION_CHARS = 40
+
+
+def is_substantive(doc: Optional[str], description: Optional[str]) -> bool:
+    """Is there enough stated intent to derive an expectation from?
+
+    A title is a label, not a specification: "coupon" says nothing about what the function should
+    return. Only a docstring or a real description counts, and both have a length floor.
+    """
+    if doc and len(doc.strip()) >= MIN_DOCSTRING_CHARS:
+        return True
+    return bool(description and len(description.strip()) >= MIN_DESCRIPTION_CHARS)
+
+
 def collect(source: str, function: str, event: Optional[Dict[str, Any]] = None,
             other_sources: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Everything the blind oracle is allowed to see. Never includes the target's body."""
@@ -122,7 +142,7 @@ def collect(source: str, function: str, event: Optional[Dict[str, Any]] = None,
         "pr_title": change.get("title"),
         "pr_description": change.get("description"),
         "call_sites": call_sites(other_sources or {}, function),
-        "has_stated_intent": bool(doc or change.get("title") or change.get("description")),
+        "has_stated_intent": is_substantive(doc, change.get("description")),
     }
 
 

@@ -64,8 +64,25 @@ class BlindOracleTool(CodedTool):
 
             expectations = args.get("expectations")
             if not expectations:
-                return self._context(source, function, sly_data, repo, target_file)
-            return self._compare(repo, target_file, function, expectations, run_id)
+                out = self._context(source, function, sly_data, repo, target_file)
+                # Record what actually happened. Observed live 2026-09-26: the tool was called 19
+                # times and never once ran a comparison, yet every proposal carried a Tier 2
+                # verdict — the agent had simply asserted one. The record must come from the tool
+                # (rule 4), exactly as proposal_store re-measures rather than trusting a reported
+                # mutation score.
+                if isinstance(out, dict) and out.get("has_stated_intent") is False:
+                    sly_data["intent_result"] = {
+                        "verdict": "no_stated_intent", "measured": True, "checked": 0,
+                        "reason": out.get("reason")}
+                return out
+            result = self._compare(repo, target_file, function, expectations, run_id)
+            if isinstance(result, dict) and result.get("verdict"):
+                sly_data["intent_result"] = {
+                    "verdict": result["verdict"], "measured": True,
+                    "checked": result.get("checked", 0),
+                    "disagreements": result.get("disagreements", []),
+                    "agreements": len(result.get("agreements") or [])}
+            return result
         except Exception as e:
             return f"Error: {e}"
 

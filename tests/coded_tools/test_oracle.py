@@ -309,3 +309,80 @@ def test_a_dispute_still_outranks_a_confirmation():
     assert classify(True, {"result": differential.UNCHANGED},
                     [{"evidence": "docs say 15%, code scales by 0.9"}], "confirms_intent")[0] \
         == "disputed"
+
+
+def test_a_bare_pr_title_is_not_a_specification():
+    """Found live on 2026-09-26. The fixture had no docstring and a one-word PR title, "coupon".
+    The oracle accepted that as intent, invented expectations, and returned `disputed` on 1 run of
+    3 against CORRECT code — while `confirms_intent` on the other 2. Since a dispute outranks every
+    other tier, a confabulated one blocks adoption and raises a finding against healthy code."""
+    src = "def apply_coupon(total, code, days_left):\n    return total\n"
+    assert intent.collect(src, "apply_coupon",
+                          {"change": {"title": "coupon"}})["has_stated_intent"] is False
+    assert intent.collect(src, "apply_coupon")["has_stated_intent"] is False
+
+
+def test_a_real_description_or_docstring_does_count():
+    src = "def apply_coupon(total, code, days_left):\n    return total\n"
+    assert intent.collect(src, "apply_coupon", {"change": {
+        "title": "coupon",
+        "description": "Apply SAVE10 for a 10% discount while the coupon has days remaining.",
+    }})["has_stated_intent"] is True
+
+    documented = ('def apply_coupon(total, code, days_left):\n'
+                  '    """SAVE10 gives 10% off while days_left is positive."""\n'
+                  '    return total\n')
+    assert intent.collect(documented, "apply_coupon")["has_stated_intent"] is True
+
+
+def test_the_oracle_stays_silent_without_substantive_intent(tmp_path):
+    """End to end: thin intent must reach the agent as 'nothing to check', not as a guess."""
+    (tmp_path / "shop.py").write_text(
+        "def apply_coupon(total, code, days_left):\n    return total\n", encoding="utf-8")
+    out = BlindOracleTool().invoke(
+        {"target_file": "shop.py", "function": "apply_coupon", "repo_workspace": str(tmp_path)},
+        {"event": {"change": {"title": "coupon"}}})
+    assert out["has_stated_intent"] is False
+    assert "nothing to compare" in out["reason"]
+
+
+# ---------------------------------------------------------------- the agent's word is not evidence
+def test_an_unmeasured_intent_claim_is_ignored(tmp_path):
+    """Observed live 2026-09-26: blind_oracle was called 19 times and ran ZERO comparisons, yet
+    every proposal carried a Tier 2 verdict — the agent had asserted one. Same lesson as
+    contract_store and as re-measuring the mutation score: the agent's summary is not the record."""
+    from coded_tools.sentinel.proposal_store_tool import ProposalStoreTool
+
+    (tmp_path / "person.py").write_text("def is_adult(age):\n    return age >= 18\n", encoding="utf-8")
+    good = ("from person import is_adult\n\n\ndef test_b():\n"
+            "    assert is_adult(18) is True\n    assert is_adult(17) is False\n")
+    sly = {"run_id": "not-a-uuid"}          # no intent_result: the oracle never measured anything
+    out = ProposalStoreTool().invoke(
+        {"target_file": "person.py", "function": "is_adult", "test_source": good,
+         "repo_workspace": str(tmp_path), "intent_verdict": "confirms_intent"}, sly)
+    assert isinstance(out, dict), out
+    # the classification must NOT have been upgraded on an unmeasured claim
+    assert out["verdict"] == "accepted"
+    assert "intent" not in (out.get("oracle_evidence") or {})
+
+
+def test_the_tool_records_its_own_verdict(tmp_path):
+    """The oracle writes what it measured into sly_data, so the record does not depend on the
+    agent reporting it faithfully."""
+    (tmp_path / "pricing.py").write_text(BUGGY, encoding="utf-8")
+    sly = {}
+    BlindOracleTool().invoke(
+        {"target_file": "pricing.py", "function": "loyalty_discount",
+         "repo_workspace": str(tmp_path),
+         "expectations": [{"args": [100.0, 3], "expected": 85.0}]}, sly)
+    assert sly["intent_result"]["verdict"] == "disputed"
+    assert sly["intent_result"]["measured"] is True
+    assert sly["intent_result"]["checked"] == 1
+
+
+def test_no_stated_intent_is_also_recorded(tmp_path):
+    (tmp_path / "bare.py").write_text("def f(x):\n    return x * 3\n", encoding="utf-8")
+    sly = {}
+    BlindOracleTool().invoke(
+        {"target_file": "bare.py", "function": "f", "repo_workspace": str(tmp_path)}, sly)
+    assert sly["intent_result"]["verdict"] == "no_stated_intent"
