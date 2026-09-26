@@ -80,7 +80,8 @@ def _run_pytest(repo: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tup
 
 
 def classify(mutation_ok: bool, differential: Dict[str, Any] | None,
-             spec_mismatches: List[Dict[str, Any]] | None = None) -> tuple[str, str]:
+             spec_mismatches: List[Dict[str, Any]] | None = None,
+             intent_verdict: str | None = None) -> tuple[str, str]:
     """What this test is, and what evidence says so (11 §6).
 
     `accepted` used to mean "the test agrees with the implementation", which reads as "the test is
@@ -105,6 +106,14 @@ def classify(mutation_ok: bool, differential: Dict[str, Any] | None,
                             f"says which side is right")
     if not mutation_ok:
         return "rejected", "the test does not detect enough injected bugs to be worth keeping"
+    # A confirmed intent is an independent witness and outranks the differential tiers: the
+    # documentation predicted what the code returns, checked without sight of the implementation.
+    # Reporting that as "characterization — unverified" would understate the evidence as badly as
+    # "accepted" once overstated it.
+    if intent_verdict == "confirms_intent":
+        return "intent_confirmed", ("an oracle reading only the documentation predicted the values "
+                                    "the implementation returns, so the code and its stated intent "
+                                    "agree")
     result = (differential or {}).get("result")
     if result == differential_mod.UNCHANGED:
         return "regression_guard", ("locks behaviour that predates this change — it cannot encode a "

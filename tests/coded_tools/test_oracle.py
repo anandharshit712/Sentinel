@@ -295,3 +295,17 @@ def test_nothing_documented_means_the_tier_stays_silent(tmp_path):
         {"target_file": "bare.py", "function": "f", "repo_workspace": str(tmp_path)}, {})
     assert ctx["has_stated_intent"] is False
     assert "nothing to compare" in ctx["reason"]
+
+
+def test_a_confirmed_intent_is_not_reported_as_unverified():
+    """Found by the first live run: the oracle confirmed intent and the proposal still read
+    `characterization` — understating the evidence as badly as `accepted` once overstated it."""
+    cls, why = classify(True, {"result": differential.UNKNOWN}, None, "confirms_intent")
+    assert cls == "intent_confirmed", cls
+    assert "without sight of the implementation" in why or "stated intent" in why
+
+
+def test_a_dispute_still_outranks_a_confirmation():
+    assert classify(True, {"result": differential.UNCHANGED},
+                    [{"evidence": "docs say 15%, code scales by 0.9"}], "confirms_intent")[0] \
+        == "disputed"

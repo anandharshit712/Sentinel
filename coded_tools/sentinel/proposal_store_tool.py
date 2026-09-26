@@ -48,12 +48,16 @@ class ProposalStoreTool(CodedTool):
                 evaluation.setdefault("oracle_evidence", {})["intent"] = {
                     "tier": "blind_oracle", "verdict": intent_verdict,
                     "witness": "the documentation, read without sight of the implementation"}
-                if intent_verdict == "disputed":
-                    evaluation["classification"] = "disputed"
-                    evaluation["classification_reason"] = (
-                        "an oracle working from the documentation alone predicted different values "
-                        "than the implementation returns — the two disagree, and a test written "
-                        "from the code takes the code's side")
+                if intent_verdict in ("disputed", "confirms_intent"):
+                    from coded_tools.sentinel.test_evaluator_tool import classify
+                    cls, why = classify(
+                        evaluation.get("verdict") == "accepted",
+                        (evaluation.get("oracle_evidence") or {}).get("differential"),
+                        ((evaluation.get("oracle_evidence") or {}).get("specification") or {})
+                        .get("mismatches"),
+                        intent_verdict)
+                    evaluation["classification"] = cls
+                    evaluation["classification_reason"] = why
 
             proposal_id = None
             persisted, persist_error = True, None

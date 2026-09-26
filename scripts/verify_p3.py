@@ -51,14 +51,30 @@ def _write(ws, rel, content):
         fh.write(content)
 
 
+def _rev(ws):
+    return subprocess.run(["git", "-C", ws, "rev-parse", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def _fixture():
+    """Two real commits, so the differential tier has a base to compare against.
+
+    This previously committed once and the event carried a fabricated base SHA, so Tier 1 reported
+    `unknown` on every live run — the script could not have failed on a broken differential tier,
+    which is the same shape as a verification that cannot fail.
+    """
     ws = tempfile.mkdtemp(prefix="sentinel-p3-")
     _sh(ws, "init", "-q"); _sh(ws, "config", "user.email", "t@t"); _sh(ws, "config", "user.name", "t")
     _write(ws, "requirements.txt", "pytest\n")
-    _write(ws, "shop.py", SOURCE)
+    # base: no coupon logic at all
+    _write(ws, "shop.py", "def apply_coupon(total, code, days_left):\n    return total\n")
     _write(ws, "tests/test_shop.py", EXISTING_TEST)
     _sh(ws, "add", "-A"); _sh(ws, "commit", "-qm", "base")
-    return ws
+    base = _rev(ws)
+    # head: the change under review adds the discount branch
+    _write(ws, "shop.py", SOURCE)
+    _sh(ws, "add", "-A"); _sh(ws, "commit", "-qm", "head")
+    return ws, base, _rev(ws)
 
 
 def _profile():
@@ -69,14 +85,14 @@ def _profile():
             "loc_added": 4, "loc_removed": 0, "blast_radius": {"count": 0}}
 
 
-def _prepare(ws, run_id):
+def _prepare(ws, run_id, base_sha, head_sha):
     """Deterministic half, in process: run the tests with coverage, then find the gap."""
     from coded_tools.sentinel.coverage_gap_tool import CoverageGapTool
     from coded_tools.sentinel.test_runner_tool import TestRunnerTool
 
     event = {"event_id": f"p3-{run_id[:8]}", "source": "manual",
              "repo": {"url": "file://x", "name": "p3-demo", "default_branch": "main"},
-             "change": {"base_sha": "0" * 40, "head_sha": "1" * 40, "branch": "pr-p3",
+             "change": {"base_sha": base_sha, "head_sha": head_sha, "branch": "pr-p3",
                         "title": "coupon", "author": "dev"},
              "target_transition": {"from_env": "dev", "to_env": "test"}, "requested_by": "tester"}
     dao.ensure_run(run_id, event)
@@ -108,8 +124,8 @@ def main(argv) -> int:
         # proposal left by the previous run of this script and report a pass for work it had not
         # done. A verification that can pass on stale rows verifies nothing.
         run_id = str(uuid.uuid4())
-        ws = _fixture()
-        sly, gaps = _prepare(ws, run_id)
+        ws, base_sha, head_sha = _fixture()
+        sly, gaps = _prepare(ws, run_id, base_sha, head_sha)
         ok, notes = True, []
 
         found = [g for g in gaps.get("gaps", []) if g["status"] != "covered"]
