@@ -1,7 +1,7 @@
 # Sentinel — build tracker
 
 **The answer to "where are we?" without having to ask.** Updated whenever a phase closes (see
-`CLAUDE.md` rule 0d). Last updated **2026-09-26** · HEAD `c66c81b` · 173 tests · 67 commits.
+`CLAUDE.md` rule 0d). Last updated **2026-09-26** · HEAD `342c2a6` · 175 tests · 69 commits.
 
 Status vocabulary, used strictly:
 
@@ -84,7 +84,7 @@ scripts · 4 migrations · 12 design documents.
 | P3.7 | `sentinel_testgen` network | ✅ | off the promotion chain by design |
 | P3.8 | `test_proposals` table | ✅ | migration 0003 |
 | P3.9 | Gateway endpoint + dashboard card | ✅ | |
-| P3.10 | `verify_p3.py` **3/3** | 🟡 | **Measured 2/3.** The one failure was a NIM `HTTP 500` mid-loop; both completed trials scored 1.00. **Why still open: provider health, not code.** Re-run when NIM is stable — it is one command |
+| P3.10 | `verify_p3.py` **3/3** | 🟡 | **Best measured 2/3** (a NIM `HTTP 500` mid-loop; completed trials scored 1.00). The fixture was also **faking its base SHA**, so the differential tier reported `unknown` on every live run — fixed 2026-09-26, but **the fixed fixture has not yet had a clean live run**: the machine lost outbound connectivity mid-attempt (`WinError 10060`, the NIM endpoint unreachable by plain curl). **Why still open: connectivity, not code.** One command when the network is back |
 | — | LLM critique layer | ✅ | Superseded and delivered by doc 11 (blind oracle) |
 | — | JS/TS generation | 🚫 | `lib/mutate` needs `ast.unparse` for a guaranteed round-trip; tree-sitter has no unparse, so JS mutation is byte-range surgery plus JS-specific operators (`==` vs `===`, truthiness) each with equivalent-mutant risk |
 
@@ -113,7 +113,8 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | O2 | Classification replaces the bare verdict | ✅ | |
 | O3 | Evaluator integration | ✅ | |
 | O4 | `lib/spec_check.py` (Tier 3) | 🟡 | **Left: invariants beyond documented rates** (bounds, idempotence, type preservation). The rate check covers the demonstrated failure with a far lower false-positive surface; broader invariants were deferred rather than guessed at |
-| O5 | Blind oracle agent (Tier 2) | 🟡 | Built and unit-verified; **live end-to-end run still owed** — see §8 |
+| O5 | Blind oracle agent (Tier 2) | ✅ | Verified live 2026-09-26: the agent ran, returned `confirms_intent`, and its verdict was persisted with all four evidence tiers (proposal 8, score 1.00, 8/8 mutants caught) |
+| O8 | `intent_confirmed` classification | ✅ | Unplanned, found by that live run: a confirmed intent was being reported as "characterization — unverified", understating an independent witness |
 | O6 | `spec_implementation_mismatch` finding | ✅ | reported on every run, not just when a test was asked for |
 | O7 | Dashboard + `verify_o.py` | ✅ | **17/17**, no LLM, no network |
 | — | `lib/pyexec.py` | ✅ | Unplanned. Python caches bytecode on (mtime, size), so a same-size mutant written within a second ran the code it replaced — a latent way to deflate every mutation score |
@@ -133,8 +134,8 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 
 | Item | Why it is not done | What unblocks it |
 |---|---|---|
-| `verify_p3` at 2/3 | A NIM `HTTP 500` mid-loop. Provider-side: the primary fails ~1 call in 12, and the last key rotation did not change it | Re-run on a day NIM is healthy |
-| O5 live end-to-end | Same provider instability; the last attempt was cut short when the session ended | One `verify_p3` run that reaches `intent_oracle_agent` |
+| `verify_p3` at 2/3 | A NIM `HTTP 500` mid-loop (primary fails ~1 call in 12; the key rotation did not change it). The re-run with the corrected fixture was then blocked by this machine losing outbound connectivity entirely | Re-run when the network and NIM are both up |
+| Differential tier, live | Verified by unit tests and `verify_o.py`, but not yet through a live generation run: the fixture that would exercise it was only fixed today and the network dropped before it completed | The same single `verify_p3` run |
 | LLM-reviewer contribution | Unknown whether reviewers add findings beyond the deterministic floor now that `contract_store` accepts their writes | A per-agent bake-off on a stable provider day |
 | C3 webhook route | Superseded for the demo by the GitHub Action | Only needed for real webhook intake (P7) |
 | Dependency licence resolution | Needs per-dependency registry lookups | A decision to take on network calls inside a coded tool |
