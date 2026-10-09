@@ -16,6 +16,7 @@ scanning the whole non-excluded diff, ranked to a 300-line cap — same return s
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -34,6 +35,11 @@ _LEGACY_CAP = 300  # no-plan fallback: ranked top-N lines handed to the LLM
 # only needs a representative sample + the ranked snippets; report_publisher recomputes the FULL
 # deterministic floor in code (_floor_findings), so nothing is lost from the final report.
 _LLM_FINDINGS_CAP = 50
+# Snippet budget in characters, on top of review_budget_lines: 800 snippets with ±3 lines of context
+# measured 560k chars (~140k tokens) on a 63k-line audit and timed the reviewer's call out. Coverage
+# reports only the snippets that fit, so "LLM deep-reviewed N lines" stays true.
+_LLM_SNIPPET_CHARS = 120_000
+_LINE_CHARS = 240
 
 # (category, regex, cwe, title) — specific rules first; one secret finding per line, first match wins.
 _RULES: List[Tuple[str, "re.Pattern", str, str]] = [
@@ -140,7 +146,14 @@ class SecretScannerTool(CodedTool):
             by_file: Dict[str, Dict[int, str]] = {}
             for p, ln, c in scoped:
                 by_file.setdefault(p, {})[ln] = c
-            snippets = [self._snippet(entry, by_file) for entry in ranked]
+            snippets: List[Dict[str, Any]] = []
+            used = 0
+            for entry in ranked:     # ranked best-first, so a budget cut drops the least relevant
+                snip = self._snippet(entry, by_file)
+                used += len(json.dumps(snip))
+                if used > _LLM_SNIPPET_CHARS and snippets:
+                    break
+                snippets.append(snip)
 
             if plan and shard is not None:
                 coverage = {"scope_lines": len(scoped), "snippet_lines": len(snippets), "shard": shard}
@@ -172,9 +185,10 @@ class SecretScannerTool(CodedTool):
     def _snippet(entry: Dict[str, Any], by_file: Dict[str, Dict[int, str]]) -> Dict[str, Any]:
         path, line = entry["file"], entry["line"]
         near = by_file.get(path, {})
-        context = [{"line": ln, "code": near[ln]}
-                   for ln in range(line - 3, line + 4) if ln in near]
-        return {"file": path, "line": line, "code": entry["code"],
+        # minified/bundled lines run to thousands of chars; a reviewer needs the start of them
+        context = [{"line": ln, "code": near[ln][:_LINE_CHARS]}
+                   for ln in range(line - 3, line + 4) if ln in near and ln != line]
+        return {"file": path, "line": line, "code": entry["code"][:_LINE_CHARS],
                 "why_flagged": entry["why"], "context": context}
 
     @staticmethod

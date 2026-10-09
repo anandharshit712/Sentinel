@@ -32,12 +32,21 @@ _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
 def _dedup(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Merge findings sharing (file, category, line_start); keep the max severity."""
+    """Merge findings sharing (file, category, line_start); keep the max severity.
+
+    A finding with no line (a dependency advisory on a manifest) is keyed by its title instead, or
+    two vulnerable packages added to one requirements.txt would collapse into one finding.
+    """
     by_key: Dict[tuple, Dict[str, Any]] = {}
     for f in findings:
-        key = (f.get("file"), f.get("category"), f.get("line_start"))
+        line = f.get("line_start")
+        key = (f.get("file"), f.get("category"), line if line is not None else f.get("title"))
         cur = by_key.get(key)
-        if cur is None or _SEV_RANK[f["severity"]] < _SEV_RANK[cur["severity"]]:
+        # On a severity tie the deterministic finding wins: an LLM restating a rule hit must not be
+        # credited as `source: llm` (it inflated the LLM layer's measured contribution on ORION).
+        if cur is None or _SEV_RANK[f["severity"]] < _SEV_RANK[cur["severity"]] or (
+                f["severity"] == cur["severity"] and f.get("source") == "tool"
+                and cur.get("source") != "tool"):
             by_key[key] = f
     return sorted(by_key.values(), key=lambda f: (_SEV_RANK[f["severity"]], f.get("source") != "tool"))
 
@@ -118,15 +127,19 @@ def _floor_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     profile = sly_data.get("change_profile") or sly_data.get("change_profile_wip")
     if not profile:
         return []
+    from coded_tools.sentinel.dependency_cve_tool import DependencyCveTool
     from coded_tools.sentinel.license_scanner_tool import LicenseScannerTool
     from coded_tools.sentinel.performance_scanner_tool import PerformanceScannerTool
     from coded_tools.sentinel.secret_scanner_tool import SecretScannerTool
 
-    # no review_plan/shard -> legacy whole-diff scan; none of these touch sly_data
+    # no review_plan/shard -> legacy whole-diff scan; none of these touch sly_data.
+    # DependencyCveTool is here because its advisories used to reach the report ONLY if a reviewer
+    # LLM copied them into its contract — a deterministic finding gated on a model's transcription.
     scan_input = {"run_id": sly_data.get("run_id"), "change_profile": profile,
                   "event": sly_data.get("event"), "repo_workspace": sly_data.get("repo_workspace")}
     out: List[Dict[str, Any]] = []
-    for tool in (SecretScannerTool(), PerformanceScannerTool(), LicenseScannerTool()):
+    for tool in (SecretScannerTool(), DependencyCveTool(), PerformanceScannerTool(),
+                 LicenseScannerTool()):
         try:
             res = tool.invoke({}, dict(scan_input))
             if isinstance(res, dict):

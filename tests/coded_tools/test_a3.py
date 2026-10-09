@@ -57,3 +57,18 @@ def test_complexity_delta_and_new_function(repo):
     assert by_name["helper"]["complexity_base"] == 0   # brand new
     assert by_name["helper"]["complexity_head"] >= 2   # 1 + boolop(and)
     assert out["max_delta"] >= 3
+
+
+def test_llm_view_is_capped_but_totals_are_not(repo, monkeypatch):
+    """A whole-repo audit must not hand the reviewer LLM thousands of functions (model-eval §6)."""
+    from coded_tools.sentinel import complexity_metrics_tool as cm
+    monkeypatch.setattr(cm, "_LLM_FUNCTIONS_CAP", 1)
+    r, base, head = repo
+    sly = {"run_id": "x"}
+    args = {"repo_path": str(r), "base_ref": base, "head_ref": head}
+    GitDiffTool().invoke(args, sly)
+    AstAnalyzerTool().invoke(args, sly)
+    out = ComplexityMetricsTool().invoke(args, sly)
+    assert [m["name"] for m in out["functions"]] == ["score"]   # the worst regression is kept
+    assert out["total_functions"] == 2 and out["functions_omitted"] == 1
+    assert out["max_complexity"] >= 4                          # totals cover everything

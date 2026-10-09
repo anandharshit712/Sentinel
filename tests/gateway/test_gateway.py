@@ -68,6 +68,14 @@ _EVENT = {"event_id": "evt-1", "source": "manual",
           "target_transition": {"from_env": "dev", "to_env": "test"}, "requested_by": "tester"}
 
 
+@pytest.fixture(autouse=True)
+def _no_reaping(monkeypatch):
+    """TestClient fires the app's startup hook, which fails every non-terminal run in the REAL dev
+    database. Unpatched, running this suite killed a live ORION audit mid-review (2026-10-09) and
+    left no trace, because the audit row went to the FakeDB."""
+    monkeypatch.setattr(dao, "reap_unfinished_runs", lambda: [])
+
+
 @pytest.fixture
 def client(monkeypatch):
     fake = FakeDB()

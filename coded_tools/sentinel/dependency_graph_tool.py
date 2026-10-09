@@ -24,6 +24,8 @@ from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.dependency_graph")
 
+_LLM_LIST_CAP = 50   # paths shown to the LLM per list; counts are always exact
+
 
 def _git(repo: str, *args: str) -> str:
     proc = subprocess.run(["git", "-C", repo, *args], capture_output=True,
@@ -139,7 +141,19 @@ class DependencyGraphTool(CodedTool):
             sly_data.pop("change_profile_wip", None)
             logger.info("run %s: dependency_graph blast=%d sensitive=%d", run_id,
                         profile["blast_radius"]["count"], len(profile["sensitive_flags"]))
-            return wrapped
+            # The LLM gets a summary; the full profile (every hunk) lives in sly_data. Returned whole,
+            # a 63k-line audit was ~830k tokens and overflowed the model's context (400) on ORION.
+            files = profile.get("files", [])
+            br = profile["blast_radius"]
+            return {"stored": "change_profile", "classification": profile.get("classification"),
+                    "files_changed": len(files), "loc_added": profile.get("loc_added"),
+                    "loc_removed": profile.get("loc_removed"),
+                    "sensitive_flags": [{"flag": f["flag"], "matched_by": f.get("matched_by"),
+                                         "files": f.get("files", [])[:10]} for f in flags],
+                    "blast_radius": {"count": br["count"], "direct": br["direct"][:_LLM_LIST_CAP],
+                                     "transitive": br["transitive"][:_LLM_LIST_CAP]},
+                    "files": [{"path": f.get("path"), "change_type": f.get("change_type")}
+                              for f in files[:_LLM_LIST_CAP]]}
         except Exception as e:
             return f"Error: {e}"
 

@@ -8,6 +8,7 @@ The contract_name enum is restricted so it can never overwrite a tool-owned cont
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import logging
@@ -50,13 +51,23 @@ class ContractStoreTool(CodedTool):
                 # contract_store calls for 1 successful write in a single run, with the whole LLM
                 # review layer lost behind the deterministic floor. Parse it: lenient at the door,
                 # strict at validation below.
+                err = ""
                 try:
                     payload = json.loads(payload)
                 except ValueError as e:
+                    err = str(e)
+                    # A Python-repr dict ({'findings': [...]}, True/None) is the other common shape;
+                    # observed on a NodeGoat audit, 2026-10-09. literal_eval evaluates literals only,
+                    # never code, so it is safe on model output. A rejection costs a chain turn.
+                    try:
+                        payload = ast.literal_eval(payload)
+                    except (ValueError, SyntaxError, MemoryError, RecursionError):
+                        payload = None
+                if payload is None:
                     logger.warning("run %s: contract_store REJECTED %s — payload is a string that "
-                                   "is not JSON: %s", run_id, name, e)
+                                   "is not JSON: %s", run_id, name, err)
                     return ("Error: payload must be an object (or a JSON string encoding one); "
-                            f"could not parse it: {e}")
+                            f"could not parse it: {err}")
             if not isinstance(payload, dict):
                 logger.warning("run %s: contract_store REJECTED %s — payload is %s, not an object",
                                run_id, name, type(payload).__name__)

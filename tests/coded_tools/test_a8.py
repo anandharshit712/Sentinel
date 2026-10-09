@@ -106,3 +106,45 @@ def test_digest_caps_at_80():
     many = [{"id": f"S{i}", "severity": "low", "file": "a.py", "title": "t"} for i in range(120)]
     out = ReviewDigestTool().invoke({}, {"run_id": "t", "security_findings_shard_1": {"findings": many}})
     assert out["total"] == 120 and len(out["findings"]) == 80
+
+
+def test_digest_adds_the_deterministic_floor_without_double_counting():
+    """Reviewers no longer copy tool findings into their contract (it timed the call out on big
+    audits), so the senior agent must still see them — recomputed in code, counted once."""
+    patch = '@@ -0,0 +1,2 @@\n+AWS_KEY = "AKIA1234567890ABCDEF"\n+x = 1\n'
+    sly = {"run_id": "t",
+           "change_profile": {"files": [{"path": "app/cfg.py", "hunks": [{"new_start": 1, "patch": patch}]}]},
+           # an older-style reviewer that still copied the tool finding, plus one of its own
+           "security_findings_shard_1": {"findings": [
+               {"id": "SEC1-001", "severity": "critical", "file": "app/cfg.py", "line_start": 1,
+                "category": "aws_access_key", "title": "AWS access key ID", "source": "tool"},
+               {"id": "SEC1-LLM-001", "severity": "medium", "file": "app/cfg.py", "line_start": 2,
+                "category": "weak_config", "title": "x", "source": "llm"}]}}
+    out = ReviewDigestTool().invoke({}, sly)
+    assert out["counts"]["critical"] == 1, out          # the key, once
+    assert out["total"] == 2, out
+
+
+def test_dependency_graph_returns_a_summary_not_the_profile(tmp_path):
+    """The full profile (every hunk) goes to sly_data; the LLM gets counts (ORION: 830k tokens)."""
+    import subprocess
+    from coded_tools.sentinel.dependency_graph_tool import DependencyGraphTool
+    from coded_tools.sentinel.git_diff_tool import GitDiffTool
+    from coded_tools.sentinel.ast_analyzer_tool import AstAnalyzerTool
+
+    def git(*a):
+        return subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (tmp_path / "a.py").write_text("x = 1\n"); git("add", "-A"); git("commit", "-qm", "b")
+    base = git("rev-parse", "HEAD")
+    for i in range(60):
+        (tmp_path / f"m{i}.py").write_text(f"def f{i}():\n    return {i}\n")
+    git("add", "-A"); git("commit", "-qm", "h")
+    args = {"repo_path": str(tmp_path), "base_ref": base, "head_ref": git("rev-parse", "HEAD")}
+    sly = {"run_id": "t"}
+    GitDiffTool().invoke(args, sly); AstAnalyzerTool().invoke(args, sly)
+    out = DependencyGraphTool().invoke(args, sly)
+    assert out["files_changed"] == 60 and len(out["files"]) == 50, out
+    assert "hunks" not in str(out)
+    assert all("hunks" in f for f in sly["change_profile"]["files"]), "the full profile is kept"

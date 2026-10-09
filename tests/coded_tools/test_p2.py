@@ -181,8 +181,12 @@ def test_contract_store_accepts_a_json_string_payload():
     assert tool.invoke({"contract_name": "compliance_findings",
                         "payload": _json.dumps(payload)}, sly) == {"stored": "compliance_findings"}
     assert sly["compliance_findings"]["findings"][0]["id"] == "P-1", "the parsed payload is stored"
-    # still strict about what it cannot parse
+    # a Python-repr dict (single quotes, True/None) — the shape that cost a retry on NodeGoat
+    assert tool.invoke({"contract_name": "quality_findings", "payload": repr(payload)}, sly) ==         {"stored": "quality_findings"}
+    # still strict about what it cannot parse, and literal_eval never runs code
     assert "Error" in tool.invoke({"contract_name": "quality_findings", "payload": "not json"}, sly)
+    assert "Error" in tool.invoke({"contract_name": "quality_findings",
+                                   "payload": "__import__('os').getcwd()"}, sly)
 
 
 # ---------------------------------------------------------------- deterministic tail (08 §6)

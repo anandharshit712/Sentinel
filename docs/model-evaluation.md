@@ -259,10 +259,16 @@ socket read times out before the agent can call `contract_store`.
 Reproduced on two different models from two different vendors. **This is a Sentinel bug, not a model
 deficiency** — and it is the single reason the LLM review layer produces nothing.
 
-**Fix (not yet applied):** cap `dependency_cve` and `complexity_metrics` returns the same way
-`secret_scanner` already caps its own, keeping the full unbounded result in code for the
-deterministic floor. This is the same rule-4 pattern already used elsewhere: the LLM gets a bounded
-view, code keeps the complete data.
+**Fix (applied 2026-10-09):** the LLM gets a bounded view and code keeps the complete data. The
+diagnosis above was only partly right. `dependency_cve` turned out to be tiny (the snapshot is 1 KB).
+The real oversized payloads, measured on a 63k-line ORION audit, were `dependency_graph` (the entire
+change profile, ~830k tokens), `secret_scanner` snippets (~140k tokens), and an instruction making
+every reviewer *retype* up to 50 tool findings into its contract. All three are now capped or
+removed, and `complexity_metrics` is capped to the 40 worst functions. Dependency advisories joined
+the deterministic floor, since until then they reached the report only through an LLM's
+transcription. Separately, `contract_store` had been rejecting string payloads (fixed 2026-09-21),
+which on its own explained "zero LLM findings". Results:
+[writeup/real-repo-trials.md §1.3](writeup/real-repo-trials.md).
 
 ---
 
@@ -300,8 +306,9 @@ answer turned out to be "the models were never the problem".
 
 ### Suggested order of work
 
-1. Cap `dependency_cve` + `complexity_metrics` LLM-facing returns (§6) — unblocks the review layer.
-2. Re-run the NodeGoat audit and confirm `source: llm` findings appear.
+1. ~~Cap `dependency_cve` + `complexity_metrics` LLM-facing returns (§6)~~ — done 2026-10-09 (see §6).
+2. ~~Re-run the NodeGoat audit and confirm `source: llm` findings appear~~ — done 2026-10-09: 10 LLM
+   findings, 279 s, no timeouts.
 3. Add retry-on-provider-error around the agent LLM call (§5).
 4. Only then revisit per-agent models, if the split still looks attractive.
 

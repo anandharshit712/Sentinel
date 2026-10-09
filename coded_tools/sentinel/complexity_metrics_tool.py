@@ -20,6 +20,11 @@ from lib.workspace import run_inputs
 logger = logging.getLogger("coded_tools.complexity_metrics")
 
 # ponytail: approximate McCabe (relative signal for the delta); good enough without a radon dep.
+# What reaches the LLM. A whole-repo audit measures thousands of functions; returned in full they stalled
+# the reviewer's NIM call until the socket timed out (docs/model-evaluation.md §6, NodeGoat). The
+# worst offenders are what a reviewer acts on, and the totals below are computed over everything.
+_LLM_FUNCTIONS_CAP = 40
+
 _BRANCH = (ast.If, ast.IfExp, ast.For, ast.AsyncFor, ast.While,
            ast.ExceptHandler, ast.With, ast.AsyncWith, ast.Assert)
 
@@ -131,9 +136,12 @@ class ComplexityMetricsTool(CodedTool):
                     metrics.append({"file": f["path"], "name": name, "complexity_head": ch,
                                     "complexity_base": cb, "complexity_delta": ch - cb, "length": length})
 
+            worst = sorted(metrics, key=lambda m: (-m["complexity_delta"], -m["complexity_head"],
+                                                   m["file"], m["name"]))
             summary = {
-                "functions": metrics,
+                "functions": worst[:_LLM_FUNCTIONS_CAP],
                 "total_functions": len(metrics),
+                "functions_omitted": max(0, len(metrics) - _LLM_FUNCTIONS_CAP),
                 "max_complexity": max((m["complexity_head"] for m in metrics), default=0),
                 "max_delta": max((m["complexity_delta"] for m in metrics), default=0),
             }

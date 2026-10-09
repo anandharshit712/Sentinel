@@ -197,3 +197,28 @@ def test_notification_db_failure_is_non_fatal(monkeypatch):
 
 def test_notification_rejects_bad_kind():
     assert NotificationTool().invoke({"kind": "spam", "summary": ""}, {"run_id": "r"}).startswith("Error:")
+
+
+def test_report_publisher_floor_includes_dependency_advisories(monkeypatch):
+    """CVE findings used to reach the report only if a reviewer LLM transcribed them."""
+    monkeypatch.setattr(dao, "save_run_payload", lambda *a, **k: None)
+    patch = "@@ -0,0 +1,2 @@\n+vulnerable-demo-lib==1.0.0\n+requests==2.20.0\n"
+    sly = {"run_id": "r-cve", "change_profile": {"files": [
+        {"path": "requirements.txt", "hunks": [{"new_start": 1, "patch": patch}]}]}}
+    ReportPublisherTool().invoke({}, sly)
+    cves = [f for f in sly["review_report"]["findings"] if f["category"] == "dependency_cve"]
+    # two packages, one manifest, no line numbers: both must survive dedup
+    assert {f["title"].split(": ")[1] for f in cves} == {"CVE-2099-0001", "CVE-2023-32681"}
+
+
+def test_dedup_credits_the_rule_not_the_llm_on_a_tie(monkeypatch):
+    """An LLM restating a rule hit at the same file/line/category/severity must not be counted as
+    an LLM finding — it made the floor look like it had missed pickle.loads on ORION."""
+    from coded_tools.sentinel.report_publisher_tool import _dedup
+    llm = {"id": "L", "severity": "high", "file": "a.py", "line_start": 3,
+           "category": "unsafe_deserialization", "title": "pickle", "source": "llm"}
+    tool = dict(llm, id="T", source="tool")
+    assert _dedup([llm, tool])[0]["source"] == "tool"
+    assert _dedup([tool, llm])[0]["source"] == "tool"
+    # a more severe LLM finding still wins: severity first
+    assert _dedup([dict(llm, severity="critical"), tool])[0]["source"] == "llm"
