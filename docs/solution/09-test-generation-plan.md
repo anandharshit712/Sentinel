@@ -95,7 +95,7 @@ ones — the whole point of P3.10 is producing that measurement.
 - **Learning from outcomes** (did an accepted test later catch a real bug?). That is Phase 4, and
   it needs this phase's records to exist first.
 
-## 7. Exit criteria — met 2026-09-23, with one number owed to the provider
+## 7. Exit criteria — met 2026-09-26
 
 - [x] `coverage_gap` finds the planted untested branch and ranks a sensitive-file gap above it.
 - [x] A generated test for that gap passes on correct code and catches ≥ 50% of mutants.
@@ -109,8 +109,8 @@ ones — the whole point of P3.10 is producing that measurement.
 - [x] `verify_b4` and `verify_p2` still pass — the promotion chain is untouched by this phase.
 - [x] Decision rate still 3/3 (the chain gained no step; the gap analysis rides inside
       `finalize_run`).
-- [~] `verify_p3` 3/3 — **measured 2/3.** The one failure was a provider `HTTP 500` mid-loop, not
-      a logic fault: both completed trials scored 1.00. See §8.
+- [x] `verify_p3` 3/3 — **met 2026-09-26** (first measured 2/3 on 2026-09-23, the one failure a
+      provider `HTTP 500` mid-loop, see §8). Every trial 1.00 with 8/8 mutants caught.
 - [x] Proposals are visible and actionable: the run detail's Generated Tests card shows the ranked
       gaps (the sensitive one first), each proposal's verdict, mutation score, injected bugs caught
       and missed, and the test itself. Verified in a browser, including Adopt flipping the status

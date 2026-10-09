@@ -1,7 +1,7 @@
 # Sentinel — build tracker
 
 **The answer to "where are we?" without having to ask.** Updated whenever a phase closes (see
-`CLAUDE.md` rule 0d). Last updated **2026-09-26** · HEAD `cb74071` · 178 tests · 70 commits.
+`CLAUDE.md` rule 0d). Last updated **2026-10-09** · 186 tests · 73 commits.
 
 Status vocabulary, used strictly:
 
@@ -25,10 +25,10 @@ A row is never ✅ because the code exists. It is ✅ when something proves it w
 | P3 — test generation | 🟡 one measurement owed to provider health | 95% |
 | P4 — learning loop | ✅ complete | 100% |
 | Oracle evidence (doc 11) | ✅ complete | 100% |
-| P5 — polish & showcase | 🟡 dashboard done, writeup not started | 30% |
+| P5 — polish & showcase | ✅ complete | 100% |
 | P7 — production track | ⬜ deliberately deferred | 0% |
 
-**Inventory:** 27 coded tools · 13 agents across 2 networks · 16 lib modules · 10 verification
+**Inventory:** 27 coded tools · 13 agents across 2 networks · 17 lib modules · 10 verification
 scripts · 4 migrations · 12 design documents.
 
 ---
@@ -51,6 +51,7 @@ scripts · 4 migrations · 12 design documents.
 | C4 | REST + SSE, approvals, rerun, audit | ✅ | |
 | D1–D5 | Dashboard → **M4** | ✅ | |
 | 6.1–6.6 | Integration, demo scripts, rehearsal → **M5** | ✅ | browser-verified, 31 UI checks |
+| — | Gateway tests no longer reap live runs | ✅ | Fixed 2026-10-09. `TestClient` fires the startup hook, which failed every in-flight run in the **real** dev DB. Running pytest killed a live ORION audit, and the audit row went to the fake DB, so it left no trace |
 
 ---
 
@@ -67,6 +68,8 @@ scripts · 4 migrations · 12 design documents.
 | P2.7 | Four-dimension merge in `report_publisher` | ✅ | |
 | P2.8 | Gateway + SPA | ✅ | |
 | P2.9 | `verify_p2.py` | ✅ | **3/3** |
+| P2.10 | LLM-facing payloads bounded | ✅ | Added 2026-10-09. On a 63k-line ORION audit `dependency_graph` handed the LLM the whole change profile (~830k tokens, a `400` context overflow), `secret_scanner` snippets came to ~140k tokens, and reviewers were told to **retype** every tool finding into their contract, which ran past the socket timeout. Now: a profile summary (~1k), a 120k-char snippet budget with honest coverage, the top 40 complexity rows, and reviewers store only their own findings. Measured in [real-repo-trials §1.3](docs/writeup/real-repo-trials.md) |
+| P2.11 | Dependency advisories in the deterministic floor | ✅ | Added 2026-10-09. They used to reach the report only if a reviewer LLM transcribed them. `_dedup` also stopped collapsing two advisories on one manifest (no line number) into one finding |
 | — | Java / Go / Rust | 🚫 | Per-language grammar + import resolution + a test-runner adapter each. A phase of its own, not a config flag |
 
 ---
@@ -126,20 +129,19 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | Item | State | Notes |
 |---|---|---|
 | Dashboard for reasoning trails + generated tests | ✅ | |
-| Public writeup of the mutation-grounded method | ⬜ | The most publishable piece of the project, per the vision doc |
-| Trial against real open-source repos | 🟡 | NodeGoat, ORION, Accident_Detection_System have all been run; **left: writing up what was found** |
-| Extract the evaluation layer as a standalone tool | ⬜ | |
+| Public writeup of the mutation-grounded method | ✅ | [docs/writeup/mutation-grounded-evaluation.md](docs/writeup/mutation-grounded-evaluation.md). In the repo, not yet posted anywhere public; where to post it is the author's call |
+| Trial against real open-source repos | ✅ | [docs/writeup/real-repo-trials.md](docs/writeup/real-repo-trials.md): the review pipeline on 4 repos and the evaluator on 9 `humanize` functions (median 0.90). Found a real missing boundary test in `humanize.clamp`, confirmed by execution |
+| Extract the evaluation layer as a standalone tool | ✅ | `python -m lib.evaluate`: no Neuro-SAN, no DB, no model. `test_evaluator` is now a thin wrapper. Handles `src/` layouts. Exit 0 only for an accepted, undisputed test. Self-check: `python -m lib.evaluate --self-check`. Not packaged for pip: nothing has asked for it yet |
 
 ## 8. Open items, and why each is still open
 
 | Item | Why it is not done | What unblocks it |
 |---|---|---|
-| `verify_p3` at 2/3 | A NIM `HTTP 500` mid-loop (primary fails ~1 call in 12; the key rotation did not change it). The re-run with the corrected fixture was then blocked by this machine losing outbound connectivity entirely | Re-run when the network and NIM are both up |
 | Tier 2 verdicts before 2026-09-26 | Every live proposal carried a `confirms_intent` or `disputed` verdict that the **agent asserted** — the oracle tool ran 19 times and never once performed a comparison. Historic proposals 9–14 carry unearned verdicts | Fixed: the tool now records its own measurement and `proposal_store` ignores an unmeasured claim. Old rows are left as they are, with this note |
-| LLM-reviewer contribution | Unknown whether reviewers add findings beyond the deterministic floor now that `contract_store` accepts their writes | A per-agent bake-off on a stable provider day |
+| Fallback rungs 2 and 3 | Probed 2026-10-09: `nemotron-3-ultra` returned 500s on 3 of 4 calls, and `glm-5.3-flash` timed out on all 4 (it also warns it "is not known to support tools"). The primary and `gpt-oss-20b` are healthy, so one live fallback remains. Swapping models is a judgement call (per-model health swings hour to hour), so it was left alone | Re-probe; replace whichever is still dead |
+| LLM-reviewer contribution (answered 2026-10-09) | **Answered.** Every security finding on every real repo came from the deterministic floor. On ORION, after the fixes, 2 of 17 LLM findings were real and beyond any rule, 4 were false positives (two at critical), 1 duplicated the floor and 10 restated complexity numbers. Earlier trials show the same shape (e.g. hardcoded Windows dataset paths on Accident_Detection_System). For three months the layer was silently non-functional because of four defects, none of them the model. See [real-repo-trials §1](docs/writeup/real-repo-trials.md) | — |
 | C3 webhook route | Superseded for the demo by the GitHub Action | Only needed for real webhook intake (P7) |
 | Dependency licence resolution | Needs per-dependency registry lookups | A decision to take on network calls inside a coded tool |
-| P5 writeup | Not started | Time; no technical blocker |
 
 ## 9. Deliberately excluded
 
@@ -160,7 +162,8 @@ PYTHONPATH=. python scripts/probe_models.py    # is NIM healthy right now?
 PYTHONPATH=. python scripts/verify_p2.py 3     # review cluster      needs the network up
 PYTHONPATH=. python scripts/verify_p3.py 3     # test generation     needs the network up
 PYTHONPATH=. python scripts/verify_b4.py       # the two demo runs   needs the network up
-python -m pytest -q                            # 173 unit tests
+PYTHONPATH=. python -m lib.evaluate --self-check  # standalone evaluator, no provider needed
+python -m pytest -q                            # 186 unit tests
 ```
 
 The first two and the probe run on any day. The rest need NIM to be answering.

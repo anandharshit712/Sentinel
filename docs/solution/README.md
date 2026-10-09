@@ -16,6 +16,8 @@ Built on **Neuro-SAN** as the sole multi-agent orchestrator. Source problem stat
 | 08  | [Post-Hackathon Plan](08-post-hackathon-plan.md)    | **Outside the hackathon set.** Phase 2 of the evolution vision (performance + compliance reviewers). 01–07 stay frozen at hackathon scope; this document and its successors carry the post-hackathon track.                        |
 | 09  | [Test Generation Plan](09-test-generation-plan.md)  | Post-hackathon Phase 3: coverage gaps, LLM test generation, and mutation-grounded evaluation. Deterministic everywhere except the generation step itself.                        |
 | 10  | [Learning Loop Plan](10-learning-loop-plan.md)      | Post-hackathon Phase 4: outcome recording and calibration. The loop recommends threshold changes and never applies them — a release gate that re-tunes itself has no stable meaning.                        |
+| 11  | [Oracle Evidence Plan](11-oracle-evidence-plan.md) | Closes the hole where mutation testing certified a test that asserts a bug: independent witnesses (differential, specification, blind oracle) and a classification that names them. |
+| —   | [Writeup: mutation-grounded evaluation](../writeup/mutation-grounded-evaluation.md) · [Real-repo trials](../writeup/real-repo-trials.md) | Post-hackathon Phase 5: the evaluation method for a general audience, and what running Sentinel on real repositories found. |
 
 Reading order: 01 → 05 (visual overview) → 03 → 02 → 04 → 06. Documents 01–07 describe the delivered hackathon system; 08 onwards is the post-hackathon track.
 Diagrams are Mermaid — render natively on GitHub and in VS Code (Markdown Preview Mermaid extension).

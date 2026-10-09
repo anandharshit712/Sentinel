@@ -58,7 +58,7 @@ def _run_test(cwd: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tuple[
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, encoding="utf-8",
                            errors="replace", timeout=timeout, check=False,
-                           env=fresh_import_env())
+                           env=fresh_import_env(repo=cwd))
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-400:]

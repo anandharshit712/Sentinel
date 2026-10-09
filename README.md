@@ -163,11 +163,26 @@ Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gat
 ## Status
 
 - ✅ Problem definition ([docs/hackathon-delivery-intelligence.md](docs/hackathon-delivery-intelligence.md)) + full design ([docs/solution/](docs/solution/))
-- ✅ **Implementation** (host-native): 22 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
+- ✅ **Implementation** (host-native): 27 coded tools (`coded_tools/sentinel/`), agent network (`registries/sentinel.hocon`) with adaptive security-review fan-out, Delivery Gateway (`gateway/`), Dashboard SPA (`frontend/`), DB (`db/`), shared lib + config. Milestones **M0–M4** met; both demo runs green through the Gateway (`scripts/verify_c.py`).
 - ✅ **Audit mode + adaptive security fan-out**: `scripts/run_repo.py --full` runs the whole pipeline over any public repo; `review_planner` sizes 1–4 parallel `security_reviewer_*` by hotspot volume; `report_publisher` reports honest deep-review coverage (`scripts/verify_audit.py`).
 - ✅ GitHub Action gate for real repos ([`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml)) — PRs post to `/api/v1/simulate`, check fails unless `promote`.
 - ✅ **Verified in a browser**: every screen driven through a real Chromium — login gate, runs list, live SSE timeline and agent graph, approvals (mandatory reject comment), compare, audit, viewer role gating.
 - ✅ **Post-hackathon Phase 2** — Performance + Compliance reviewers, four-dimension merged report, deterministic tail ([docs/solution/08-post-hackathon-plan.md](docs/solution/08-post-hackathon-plan.md)). Documents 01–07 stay frozen at hackathon scope; 08 records what changed since.
+- ✅ **Post-hackathon Phase 3** — coverage gaps → generated tests → mutation-grounded evaluation, off the promotion chain ([09](docs/solution/09-test-generation-plan.md)).
+- ✅ **Post-hackathon Phase 4** — outcome recording and calibration; the loop recommends threshold changes and never applies them ([10](docs/solution/10-learning-loop-plan.md)).
+- ✅ **Oracle evidence** — a test's verdict names its independent witnesses (differential, specification, blind oracle), so a test that asserts a bug ends `disputed`, not `accepted` ([11](docs/solution/11-oracle-evidence-plan.md)).
+- ✅ **Post-hackathon Phase 5** — [method writeup](docs/writeup/mutation-grounded-evaluation.md), [real-repo trials](docs/writeup/real-repo-trials.md), and the evaluator as a standalone CLI (below).
+- Full per-item tracker with what is left and why: [PROGRESS.md](PROGRESS.md).
+
+### Standalone test evaluator
+
+The evaluation layer runs without agents, a database or a model — stdlib + pytest + git — against any Python repo pytest can run:
+
+```powershell
+$env:PYTHONPATH="."; .venv\Scripts\python.exe -m lib.evaluate --repo path/to/repo --target pkg/module.py --function my_function --test path/to/test_module.py [--base <sha>] [--json]
+```
+
+It reports the mutation score, every injected bug the test missed, and the classification (`regression_guard`, `change_documented`, `characterization`, `disputed`, `rejected`). Exit status 0 only for an accepted, undisputed test, so CI can gate on it. `src/` layouts are handled; a package with build-time generated modules (e.g. a hatch-vcs `_version.py`) needs that file present first.
 
 ## Framework Reference
 
