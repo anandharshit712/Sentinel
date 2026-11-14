@@ -10,8 +10,8 @@
 
     # Working stand-in for the locked 70B (which times out on the public endpoint).
     # Was mistral-small-4-119b until NIM retired it on 2026-07-27 (HTTP 410 -> every agent call failed).
-    "nvidia-nemotron-3-super":           { "use_model_name": "nvidia/nemotron-3-super-120b-a12b" },
-    "nvidia/nemotron-3-super-120b-a12b": { "class": "nvidia", "max_output_tokens": 8192 },
+    # nvidia/nemotron-3-super-120b-a12b was the working primary until 2026-11-14, when it began
+    # returning HTTP 404 "Function ... Not found for account" (still listed in /v1/models). Removed.
 
     # z-ai/glm-5.2 was the fallback until NIM retired it on 2026-08-21 (HTTP 410). Removed rather
     # than left dangling: a dead id here is silent until every agent call fails.
@@ -26,8 +26,8 @@
     "nvidia-gpt-oss-20b":  { "use_model_name": "openai/gpt-oss-20b" },
     "openai/gpt-oss-20b":  { "class": "nvidia", "max_output_tokens": 8192 },
 
-    # The glm line moved 5.2 -> 5.3 (5.2 went EOL 2026-08-21). The -flash variant is the one that
-    # answered during the 2026-09-23 degradation.
-    "nvidia-glm-5.3-flash": { "use_model_name": "z-ai/glm-5.3-flash" },
-    "z-ai/glm-5.3-flash":   { "class": "nvidia", "max_output_tokens": 8192 }
+    # z-ai/glm-5.3-flash removed 2026-11-14: timed out at 120s on every probe since 2026-10-09.
+    # Second fallback rung since 2026-11-14 (probe 3/3 with structured tool calls).
+    "nvidia-mistral-large-4": { "use_model_name": "mistralai/mistral-large-4-1t-a52b" },
+    "mistralai/mistral-large-4-1t-a52b": { "class": "nvidia", "max_output_tokens": 8192 }
 }

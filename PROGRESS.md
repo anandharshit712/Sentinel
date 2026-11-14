@@ -1,7 +1,7 @@
 # Sentinel — build tracker
 
 **The answer to "where are we?" without having to ask.** Updated whenever a phase closes (see
-`CLAUDE.md` rule 0d). Last updated **2026-10-09** · 186 tests · 73 commits.
+`CLAUDE.md` rule 0d). Last updated **2026-11-15** · 186 tests · 74 commits.
 
 Status vocabulary, used strictly:
 
@@ -22,7 +22,7 @@ A row is never ✅ because the code exists. It is ✅ when something proves it w
 |---|---|---|
 | Hackathon build (M0–M5) | ✅ delivered, demo-ready, browser-verified | 97% |
 | P2 — full review cluster | ✅ complete | 100% |
-| P3 — test generation | 🟡 one measurement owed to provider health | 95% |
+| P3 — test generation | ✅ complete (`verify_p3` 3/3, 2026-09-26) | 100% |
 | P4 — learning loop | ✅ complete | 100% |
 | Oracle evidence (doc 11) | ✅ complete | 100% |
 | P5 — polish & showcase | ✅ complete | 100% |
@@ -138,7 +138,7 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | Item | Why it is not done | What unblocks it |
 |---|---|---|
 | Tier 2 verdicts before 2026-09-26 | Every live proposal carried a `confirms_intent` or `disputed` verdict that the **agent asserted** — the oracle tool ran 19 times and never once performed a comparison. Historic proposals 9–14 carry unearned verdicts | Fixed: the tool now records its own measurement and `proposal_store` ignores an unmeasured claim. Old rows are left as they are, with this note |
-| Fallback rungs 2 and 3 | Probed 2026-10-09: `nemotron-3-ultra` returned 500s on 3 of 4 calls, and `glm-5.3-flash` timed out on all 4 (it also warns it "is not known to support tools"). The primary and `gpt-oss-20b` are healthy, so one live fallback remains. Swapping models is a judgement call (per-model health swings hour to hour), so it was left alone | Re-probe; replace whichever is still dead |
+| Model chain (resolved 2026-11-14) | **Closed.** The probe found the primary `nemotron-3-super` returning HTTP 404 ("Function … Not found for account", though `/v1/models` still lists it) and `glm-5.3-flash` still timing out at 120s. Under the standing rule (probe 3/3 **and** `verify_b4` PASS) the chain is now `nemotron-3-ultra` → `mistral-large-4-1t-a52b` → `gpt-oss-20b`; `.env` `MODEL_NAME` moved to `nvidia-nemotron-3-ultra` (it overrides the whole network, so it was pointing every agent at the dead model). `probe_models.py` 3/3 usable, `verify_b4` PASS (happy → promote, insecure → escalate at risk 100, 1 critical, health 51) | Re-probe before trusting it; NIM health swings hour to hour |
 | LLM-reviewer contribution (answered 2026-10-09) | **Answered.** Every security finding on every real repo came from the deterministic floor. On ORION, after the fixes, 2 of 17 LLM findings were real and beyond any rule, 4 were false positives (two at critical), 1 duplicated the floor and 10 restated complexity numbers. Earlier trials show the same shape (e.g. hardcoded Windows dataset paths on Accident_Detection_System). For three months the layer was silently non-functional because of four defects, none of them the model. See [real-repo-trials §1](docs/writeup/real-repo-trials.md) | — |
 | C3 webhook route | Superseded for the demo by the GitHub Action | Only needed for real webhook intake (P7) |
 | Dependency licence resolution | Needs per-dependency registry lookups | A decision to take on network calls inside a coded tool |

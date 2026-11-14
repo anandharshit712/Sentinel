@@ -7,22 +7,20 @@
     # 2026-07-27 and now returns HTTP 410, which broke every agent call. Re-probe with
     # `GET /v1/models` + a tool-call request before trusting anything here (2026-08-16).
     "fallbacks": [
-        # Working dev primary, form B = class:nvidia + RAW NIM id (a bare key with class -> 404). (rule 3)
-        # Verified 2026-08-16: emits structured tool calls, ~1.2-1.9s on a probe request.
-        { "class": "nvidia", "model_name": "nvidia/nemotron-3-super-120b-a12b", "temperature": 0.1 },
-        # Fallback. Was z-ai/glm-5.2 until NIM retired it on 2026-08-21 (HTTP 410), leaving the
-        # network with NO live fallback. gpt-oss-20b scored 9/9 recall / 0 FPs in the bake-off
-        # (docs/model-evaluation.md §3) and probes 3/3 with tool calls at ~1-4s (2026-09-20).
-        # Was openai/gpt-oss-20b, which probed 0/2 (120s timeouts) on 2026-09-25 having been fine
-        # days earlier. nemotron-3-ultra probed 2/2 the same minute, having itself been timing out
-        # all week — NIM's per-model health swings hour to hour, so this order is a snapshot, not a
-        # ranking. Re-probe (scripts/probe_models.py) before trusting it.
+        # Order as of the 2026-11-14 probe (scripts/probe_models.py, 3 trials each). Form B =
+        # class:nvidia + RAW NIM id (a bare key with class -> 404). (rule 3)
+        # Removed that day: nvidia/nemotron-3-super-120b-a12b (primary since 2026-08-16) now returns
+        # HTTP 404 "Function ... Not found for account" although /v1/models still lists it, and
+        # z-ai/glm-5.3-flash timed out at 120s on every probe since 2026-10-09.
+        # NIM's per-model health swings hour to hour, so this order is a snapshot, not a ranking.
+        # Primary: nemotron-3-ultra. 3/3 on 2026-11-14 (it was returning 500s on 2026-10-09).
         { "class": "nvidia", "model_name": "nvidia/nemotron-3-ultra-550b-a55b", "temperature": 0.1 },
-        # Third rung, added 2026-09-23 during a NIM-wide bad patch: the primary was returning 500s
-        # and gpt-oss-20b was timing out at 90s, while this one still answered with tool calls
-        # (slowly, ~112s). Slow-but-alive is what keeps a run from dying — the 2026-09-20 outage
-        # was survivable only because SOMETHING below the primary still worked.
-        { "class": "nvidia", "model_name": "z-ai/glm-5.3-flash", "temperature": 0.1 },
+        # Second rung, new 2026-11-14: 3/3 with structured tool calls.
+        { "class": "nvidia", "model_name": "mistralai/mistral-large-4-1t-a52b", "temperature": 0.1 },
+        # Third rung: gpt-oss-20b scored 9/9 recall / 0 FPs in the bake-off (docs/model-evaluation.md
+        # §3); 3/3 on 2026-11-14. Kept deliberately — slow-but-alive below the primary is what
+        # keeps a run from dying on the primary's bad minute (2026-09-20 outage).
+        { "class": "nvidia", "model_name": "openai/gpt-oss-20b", "temperature": 0.1 },
         # meta/llama-3.3-70b-instruct (the originally documented primary) is deliberately NOT here:
         # it still times out at 120s on the public NIM endpoint.
         { "model_name": ${?FALLBACK_MODEL_NAME} }     # optional 2nd provider (gpt-4o / claude); ignored if unset
