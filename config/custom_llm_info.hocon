@@ -16,18 +16,22 @@
     # z-ai/glm-5.2 was the fallback until NIM retired it on 2026-08-21 (HTTP 410). Removed rather
     # than left dangling: a dead id here is silent until every agent call fails.
 
+    # BYOK (12 §5): with LLM_KEY_SOURCE=sly_data each nvidia model reads its key from the request's
+    # sly_data.llm_config (neuro-san replace_any_required_api_keys), so a run can only use the key
+    # the Gateway hands it and never falls back to the server's env key. Unset -> env key as before.
+
     # Per-agent slots (docs/model-evaluation.md §3 — both scored 9/9 with 0 false positives).
     # NOTE: max_output_tokens is NOT free headroom to trim. Verbose reasoning models return an
     # EMPTY finding set when starved of output tokens — no error, just silence. nemotron-3-super
     # needs >4096; nemotron-3-nano needs >8192. Re-run the bake-off before lowering any of these.
     "nvidia-nemotron-3-ultra":           { "use_model_name": "nvidia/nemotron-3-ultra-550b-a55b" },
-    "nvidia/nemotron-3-ultra-550b-a55b": { "class": "nvidia", "max_output_tokens": 8192 },
+    "nvidia/nemotron-3-ultra-550b-a55b": { "class": "nvidia", "max_output_tokens": 8192, "nvidia_api_key": ${?LLM_KEY_SOURCE} },
 
     "nvidia-gpt-oss-20b":  { "use_model_name": "openai/gpt-oss-20b" },
-    "openai/gpt-oss-20b":  { "class": "nvidia", "max_output_tokens": 8192 },
+    "openai/gpt-oss-20b":  { "class": "nvidia", "max_output_tokens": 8192, "nvidia_api_key": ${?LLM_KEY_SOURCE} },
 
     # z-ai/glm-5.3-flash removed 2026-11-14: timed out at 120s on every probe since 2026-10-09.
     # Second fallback rung since 2026-11-14 (probe 3/3 with structured tool calls).
     "nvidia-mistral-large-4": { "use_model_name": "mistralai/mistral-large-4-1t-a52b" },
-    "mistralai/mistral-large-4-1t-a52b": { "class": "nvidia", "max_output_tokens": 8192 }
+    "mistralai/mistral-large-4-1t-a52b": { "class": "nvidia", "max_output_tokens": 8192, "nvidia_api_key": ${?LLM_KEY_SOURCE} }
 }

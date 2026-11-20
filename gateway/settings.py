@@ -44,3 +44,12 @@ OPEN_MODE = (os.environ.get("SENTINEL_OPEN_MODE", "").lower() in ("1", "true", "
 # C3a: repos permitted through simulate. Empty -> allow all (dev). Set SENTINEL_REPO_ALLOWLIST to a
 # comma list of repo.name values to restrict which repos may be cloned + executed on the host.
 ALLOWED_REPOS = {r.strip() for r in os.environ.get("SENTINEL_REPO_ALLOWLIST", "").split(",") if r.strip()}
+
+# Hosted-mode abuse controls (12 §5). Enforced only with AUTH_MODE=oidc: a self-hosted install is
+# its own operator and is not rate-limited against itself.
+QUOTA_RUNS_PER_DAY_ACCOUNT = int(os.environ.get("QUOTA_RUNS_PER_DAY_ACCOUNT", "50"))
+QUOTA_RUNS_PER_DAY_REPO = int(os.environ.get("QUOTA_RUNS_PER_DAY_REPO", "20"))
+MAX_REPO_MB = int(os.environ.get("MAX_REPO_MB", "500"))
+# BYOK: when "sly_data", the LLM configs read nvidia_api_key from each request's sly_data, so a run
+# can only use the key the Gateway hands it (the account's own, or this install's env key).
+LLM_KEY_SOURCE = os.environ.get("LLM_KEY_SOURCE", "").strip().lower()

@@ -52,6 +52,9 @@ def run_migrations_online() -> None:
             version_table_schema=SCHEMA,
         )
         with context.begin_transaction():
+            # Migrations are system work: row-level security (0007) must not hide rows from a
+            # data migration. Transaction-local, set inside alembic's own transaction.
+            connection.exec_driver_sql("SELECT set_config('app.account_id', '*', true)")
             context.run_migrations()
 
 

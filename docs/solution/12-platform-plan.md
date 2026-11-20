@@ -127,7 +127,85 @@ _Filled in when the phase closes._
 
 ## 5. Phase 4 — Accounts, tenancy, BYOK
 
-_Filled in when the phase closes._
+One codebase, two auth modes:
+
+- `AUTH_MODE=tokens` (default). Today's shared-token shim. A self-hosted install is one tenant
+  (the `legacy` account) and its operator.
+- `AUTH_MODE=oidc`. Hosted mode, described below.
+
+**Identity is Keycloak** (`deploy/keycloak/realm-sentinel.json`). Keycloak owns everything
+security-sensitive about login: email+password with verification, brute-force lockout, optional
+TOTP, a 12-character password policy, and GitHub/GitLab sign-in. Sentinel writes no login
+security of its own.
+
+- **Sign-in.** The Gateway runs the OAuth code flow as a confidential client (BFF): `/auth/login`
+  → Keycloak → `/auth/callback`. Sessions live in HttpOnly cookies, and the SPA never holds a
+  token. An expired access token is renewed from the refresh cookie on the next request.
+  `gateway/auth.py` verifies tokens against the realm JWKS and accepts only tokens issued to the
+  Sentinel client (`azp`).
+- **Link gate.** Until a GitHub or GitLab account is linked, every route except profile and linking
+  answers 403 `link_required`, and the SPA shows only the linking page. Linking uses Keycloak's
+  client-initiated account linking. The IdPs store their tokens (`storeToken`), and the Gateway
+  reads them through the broker token endpoint (`read-token` is a realm default role). One
+  code-host account belongs to at most one Sentinel account (`UNIQUE (provider, subject)`).
+  Unlinking removes the federated identity in Keycloak, and in the same transaction suspends every
+  repo registered through that host and revokes its CI keys. A link found missing at the next
+  `/whoami` is treated the same way.
+- **Repo ownership.** GitHub needs `permissions.admin`; GitLab needs access level >= Maintainer.
+  Both are asked of the host with the linked user's own token. Any other host is registered
+  `pending` with a one-time token and stays pending until `.sentinel-verify` holds it on the
+  default branch. Repos are keyed by the host's immutable id, so a rename cannot hijack a
+  registration. Token mode skips ownership: the admin-token holder is the operator.
+- **CI auth.**
+  - GitHub Actions and GitLab CI send their OIDC job token. The Gateway verifies issuer, audience
+    (`CI_OIDC_AUDIENCE`), signature and expiry, then matches the signed repository id to the
+    registration. No long-lived secret is involved.
+  - Jenkins sends a per-repo API key (`X-Sentinel-Key`), shown once and stored as a sha256 hash.
+  - `POST /api/v1/ci/runs` additionally requires the event's clone URL to be the registered repo's.
+- **Tenancy in the database.**
+  - Migration 0006 adds `accounts`, `identities`, `repos`, `repo_keys` and `llm_keys`, plus
+    `account_id` on `runs`, `audit_events` and `incidents`. Existing rows are backfilled to
+    `legacy`.
+  - Migration 0007 enables `FORCE ROW LEVEL SECURITY` on every tenant table. Every transaction
+    sets `app.account_id`: an account uuid, `*` for system work, or `''`, which sees nothing.
+  - In hosted mode every request starts in `''`, and only authentication widens it. A handler that
+    forgets to authenticate fails closed.
+  - A trigger fills `account_id` from the run or from the scope, so no insert site can mislabel a
+    row.
+  - The neuro-san coded tools run as system scope. They only write under the `run_id` the Gateway
+    put in `sly_data`, which the LLM cannot see or change.
+- **Bring your own key (BYOK).**
+  - Keys are validated on save with one real tool-call request against the primary model.
+  - Keys are encrypted with Fernet under `SENTINEL_SECRET_KEY` (`lib/secretbox.py`). Only a
+    4-character hint is ever shown.
+  - With `LLM_KEY_SOURCE=sly_data`, every NIM model config reads `nvidia_api_key` from the
+    request's `sly_data.llm_config`: neuro-san's `replace_any_required_api_keys` swaps the literal
+    `"sly_data"` for that value.
+  - The Gateway hands each run its repo's key, else its account's key, never the host's.
+    `scripts/verify_byok.py` proved, live on 2026-11-20: no key in `sly_data` → the run is refused
+    even with the server's env key present; with the key → the run promotes; the key appears in
+    neither the returned `sly_data`, the server log, nor the thinking files.
+- **Abuse controls (hosted).** Runs per 24 h per account (`QUOTA_RUNS_PER_DAY_ACCOUNT`, default 50)
+  and per repo (default 20), and a maximum repo size (`MAX_REPO_MB`, default 500). Platform admins
+  (`SENTINEL_ADMIN_EMAILS`) can suspend or reactivate accounts, and the account's status is checked
+  on every request. `audit_events.account_id` is the usage log.
+- **Privacy.** A privacy page states what leaves the box: code snippets go to the LLM provider
+  under the user's own key. Runs and findings past `accounts.retention_days` (default 90) are
+  purged daily, in hosted mode only. A self-hosted install's history is its operator's to keep.
+
+**Verified by:** `tests/gateway/test_tenancy.py`, which covers:
+
+- CI tokens: wrong audience, issuer, signing key or expiry are rejected.
+- A token minted for another client is not a session.
+- The link hash, the link gate, quota and suspension.
+- Against the real database: A cannot read B's run or child rows by direct id, cannot write into
+  B's run, an unscoped transaction sees nothing, and audit rows follow their run.
+- The API key is stored hashed and dies on revoke.
+- Unlinking suspends repos and revokes keys.
+- A host account links to only one Sentinel account.
+
+Also `verify_byok.py` (live), and `scripts/verify_tenancy.py`: two real Keycloak users signed in
+through the Gateway, isolated over HTTP.
 
 ## 6. Phase 5 — CI platforms
 

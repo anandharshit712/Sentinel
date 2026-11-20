@@ -1,10 +1,18 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import type { Band, Decision, Severity, RunState, RunRow, RunDetail, Approval, AuditEvent } from './types'
+import type { Band, Decision, Severity, RunState, RunRow, RunDetail, Approval, AuditEvent,
+  Me, Repo, LlmKey, AccountRow } from './types'
 
 // ---------------------------------------------------------------- auth (token shim, 06 §9)
 type Role = 'viewer' | 'approver' | 'admin'
 const RANK: Record<Role, number> = { viewer: 0, approver: 1, admin: 2 }
-const AUTH = { token: sessionStorage.getItem('token') || '', role: (sessionStorage.getItem('role') as Role) || 'approver' }
+const AUTH = {
+  token: sessionStorage.getItem('token') || '', role: (sessionStorage.getItem('role') as Role) || 'approver',
+  mode: 'tokens' as AuthMode,
+  onLinkRequired: () => {},   // set by AuthProvider: an API 403 `link_required` flips the SPA to the link page
+}
+type AuthMode = 'tokens' | 'oidc'
+// OIDC mode: the session is an HttpOnly cookie the Gateway set; the SPA never holds a token.
+const signIn = () => { window.location.href = '/auth/login' }
 
 // verify a token against the backend; returns its real role (throws on 401). Used by the login gate.
 async function verifyToken(token: string): Promise<Role> {
@@ -17,12 +25,17 @@ type AuthState = {
   role: Role; token: string
   openMode: boolean | null   // null = still discovering; true = no auth required
   verified: boolean          // cleared to false in token mode until a valid token is entered
+  authMode: AuthMode
+  me: Me | null              // OIDC only: account, linked code hosts, link gate
+  authError: string          // OIDC only: whoami refused (e.g. account suspended)
+  refreshMe: () => Promise<void>
   set: (r: Role, t: string) => void
   login: (t: string) => Promise<void>
   logout: () => void
 }
 const AuthCtx = createContext<AuthState>({
   role: AUTH.role, token: AUTH.token, openMode: null, verified: false,
+  authMode: 'tokens', me: null, authError: '', refreshMe: async () => {},
   set: () => {}, login: async () => {}, logout: () => {},
 })
 export const useAuth = () => useContext(AuthCtx)
@@ -32,11 +45,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setTok] = useState(AUTH.token)
   const [openMode, setOpenMode] = useState<boolean | null>(null)
   const [verified, setVerified] = useState(false)
+  const [authMode, setAuthMode] = useState<AuthMode>('tokens')
+  const [me, setMe] = useState<Me | null>(null)
+  const [authError, setAuthError] = useState('')
+
+  const refreshMe = useCallback(async () => {
+    const r = await fetch('/api/v1/whoami').catch(() => null)
+    if (r?.status === 401) return signIn()
+    if (!r?.ok) { setAuthError(r ? await errText(r) : 'Gateway unreachable.'); return }
+    const j: Me = await r.json()
+    AUTH.role = j.role as Role
+    setMe(j); setRole(j.role as Role); setAuthError(''); setVerified(true)
+  }, [])
 
   useEffect(() => {
+    AUTH.onLinkRequired = () => setMe(m => (m ? { ...m, link_required: true } : m))
     let alive = true
-    fetch('/healthz').then(r => r.json()).then(async ({ open_mode }) => {
+    fetch('/healthz').then(r => r.json()).then(async ({ open_mode, auth_mode }) => {
       if (!alive) return
+      if (auth_mode === 'oidc') {
+        AUTH.mode = 'oidc'; AUTH.token = ''; setTok('')
+        setAuthMode('oidc'); setOpenMode(false)
+        await refreshMe()
+        return
+      }
       if (open_mode) { AUTH.token = ''; setOpenMode(true); setVerified(true); return }
       setOpenMode(false)
       if (AUTH.token) {  // resume a stored session if the token still verifies
@@ -45,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }).catch(() => { if (alive) { setOpenMode(true); setVerified(true) } })  // healthz down → don't hard-lock the UI
     return () => { alive = false }
-  }, [])
+  }, [refreshMe])
 
   const set = (r: Role, t: string) => {  // OPEN_MODE demo controls (nav dropdown + token input)
     AUTH.role = r; AUTH.token = t
@@ -59,11 +91,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTok(t); setRole(r); setVerified(true)
   }
   const logout = () => {
+    if (AUTH.mode === 'oidc') { window.location.href = '/auth/logout'; return }
     fetch('/api/v1/logout', { method: 'POST' }).catch(() => {})  // clear the HttpOnly SSE cookie
     AUTH.token = ''; sessionStorage.removeItem('token')
     setTok(''); setVerified(false)
   }
-  return <AuthCtx.Provider value={{ role, token, openMode, verified, set, login, logout }}>{children}</AuthCtx.Provider>
+  return <AuthCtx.Provider value={{ role, token, openMode, verified, authMode, me, authError, refreshMe, set, login, logout }}>
+    {children}</AuthCtx.Provider>
 }
 
 export function RoleGate({ need, children }: { need: Role; children: ReactNode }) {
@@ -72,11 +106,26 @@ export function RoleGate({ need, children }: { need: Role; children: ReactNode }
 }
 
 // ---------------------------------------------------------------- REST
+// FastAPI errors are {"detail": "..."}: surface the sentence (quota, suspension, ownership), not the JSON.
+async function errText(r: Response): Promise<string> {
+  const body = await r.text().catch(() => '')
+  try { const d = JSON.parse(body).detail; if (typeof d === 'string') return d } catch { /* not JSON */ }
+  return body || r.statusText
+}
+export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as any) }
   if (AUTH.token) headers.Authorization = `Bearer ${AUTH.token}`
   const r = await fetch(path, { ...init, headers })
-  if (!r.ok) throw new Error(`${r.status} ${await r.text().catch(() => '')}`)
+  if (!r.ok) {
+    const detail = await errText(r)
+    if (AUTH.mode === 'oidc') {
+      if (r.status === 401) signIn()                                           // session expired
+      else if (r.status === 403 && detail.includes('link_required')) AUTH.onLinkRequired()
+    }
+    throw new Error(`${r.status} ${detail}`)
+  }
   return r.json()
 }
 
@@ -101,6 +150,25 @@ export const useApprovals = (status = 'pending') =>
 export const useCalibration = () => useFetch<any>('/api/v1/calibration', [])
 export const useAudit = (runId?: string) =>
   useFetch<{ events: AuditEvent[] }>(`/api/v1/audit${runId ? `?run_id=${runId}` : ''}`, [runId])
+
+// accounts / tenancy (Phase 4)
+export const useRepos = () => useFetch<{ repos: Repo[] }>('/api/v1/repos', [])
+export const useLlmKeys = (on: boolean) => useFetch<{ keys: LlmKey[] }>(on ? '/api/v1/llm-keys' : null, [on])
+export const useAdminAccounts = () => useFetch<{ accounts: AccountRow[] }>('/api/v1/admin/accounts', [])
+const post = <T,>(path: string, body?: unknown) =>
+  api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+export const registerRepo = (url: string) => post<Repo>('/api/v1/repos', { url })
+export const verifyRepo = (id: string) => post<{ id: string; status: string }>(`/api/v1/repos/${id}/verify`)
+export const createRepoKey = (id: string) => post<{ id: number; key: string; note: string }>(`/api/v1/repos/${id}/keys`)
+export const revokeRepoKey = (id: string, keyId: number) =>
+  api<{ revoked: number }>(`/api/v1/repos/${id}/keys/${keyId}`, { method: 'DELETE' })
+export const unlinkHost = (provider: string) =>
+  post<{ unlinked: string; repos_suspended: number }>(`/api/v1/me/links/${provider}/unlink`)
+export const saveLlmKey = (key: string, repo_id?: string) =>
+  post<{ id: number; hint: string }>('/api/v1/llm-keys', { key, repo_id: repo_id || null })
+export const revokeLlmKey = (id: number) => api<{ revoked: number }>(`/api/v1/llm-keys/${id}`, { method: 'DELETE' })
+export const setAccountStatus = (id: string, status: 'active' | 'suspended') =>
+  post<{ id: string; status: string }>(`/api/v1/admin/accounts/${id}/status`, { status })
 
 export const resolveApproval = (id: number, action: 'approve' | 'reject', comment: string) =>
   api(`/api/v1/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action, comment }) })

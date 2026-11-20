@@ -14,13 +14,13 @@
         # z-ai/glm-5.3-flash timed out at 120s on every probe since 2026-10-09.
         # NIM's per-model health swings hour to hour, so this order is a snapshot, not a ranking.
         # Primary: nemotron-3-ultra. 3/3 on 2026-11-14 (it was returning 500s on 2026-10-09).
-        { "class": "nvidia", "model_name": "nvidia/nemotron-3-ultra-550b-a55b", "temperature": 0.1 },
+        { "class": "nvidia", "model_name": "nvidia/nemotron-3-ultra-550b-a55b", "temperature": 0.1, "nvidia_api_key": ${?LLM_KEY_SOURCE} },
         # Second rung, new 2026-11-14: 3/3 with structured tool calls.
-        { "class": "nvidia", "model_name": "mistralai/mistral-large-4-1t-a52b", "temperature": 0.1 },
+        { "class": "nvidia", "model_name": "mistralai/mistral-large-4-1t-a52b", "temperature": 0.1, "nvidia_api_key": ${?LLM_KEY_SOURCE} },
         # Third rung: gpt-oss-20b scored 9/9 recall / 0 FPs in the bake-off (docs/model-evaluation.md
         # §3); 3/3 on 2026-11-14. Kept deliberately — slow-but-alive below the primary is what
         # keeps a run from dying on the primary's bad minute (2026-09-20 outage).
-        { "class": "nvidia", "model_name": "openai/gpt-oss-20b", "temperature": 0.1 },
+        { "class": "nvidia", "model_name": "openai/gpt-oss-20b", "temperature": 0.1, "nvidia_api_key": ${?LLM_KEY_SOURCE} },
         # meta/llama-3.3-70b-instruct (the originally documented primary) is deliberately NOT here:
         # it still times out at 120s on the public NIM endpoint.
         { "model_name": ${?FALLBACK_MODEL_NAME} }     # optional 2nd provider (gpt-4o / claude); ignored if unset

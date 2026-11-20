@@ -27,21 +27,63 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from db import dao
-from gateway import settings
+from db import accounts, dao
+from gateway import auth, settings
 
 logger = logging.getLogger("gateway")
 from gateway.invoker.neuro_san_client import invoke_network
-from lib import calibration, workspace
+from lib import calibration, sandbox, secretbox, workspace
 from lib.redact import redact
 
 app = FastAPI(title="Sentinel Delivery Gateway", version="1")
+
+
+@app.middleware("http")
+async def _deny_by_default(request: Request, call_next):
+    """Hosted mode: every request starts in the deny scope; only _authenticate widens it to the
+    caller's account. A handler that forgets to authenticate sees no rows, rather than all of them."""
+    if auth.AUTH_MODE == "oidc":
+        dao.set_scope("")
+    response = await call_next(request)
+    new = getattr(request.state, "new_tokens", None)
+    if new:   # the session was refreshed while serving this request
+        _set_session_cookies(response, new)
+    return response
+
+
+def _set_session_cookies(response: Response, tokens: dict) -> None:
+    secure = auth.PUBLIC_URL.startswith("https")
+    response.set_cookie("sentinel_session", tokens["access_token"], httponly=True, samesite="lax",
+                        secure=secure, max_age=int(tokens.get("expires_in", 300)), path="/")
+    if tokens.get("refresh_token"):
+        response.set_cookie("sentinel_refresh", tokens["refresh_token"], httponly=True, samesite="lax",
+                            secure=secure, max_age=int(tokens.get("refresh_expires_in", 28800)), path="/")
+
+
+@app.on_event("startup")
+async def _retention_loop() -> None:
+    """Hosted mode: purge runs past each account's retention (default 90 days) once a day. Not in
+    token mode — a self-hosted install's history is its operator's to keep."""
+    if auth.AUTH_MODE != "oidc":
+        return
+
+    async def loop() -> None:
+        while True:
+            try:
+                purged = await asyncio.to_thread(accounts.purge_expired)
+                if purged:
+                    logger.info("retention purge: %s", purged)
+            except Exception as e:   # a failed purge must not take the Gateway down
+                logger.error("retention purge failed: %s", e)
+            await asyncio.sleep(24 * 3600)
+
+    _TASKS.add(asyncio.create_task(loop()))
 
 
 @app.on_event("startup")
@@ -132,11 +174,62 @@ def _check(role: str | None, min_role: str) -> str:
     return role
 
 
-def _require(min_role: str):
-    def dep(authorization: str | None = Header(default=None)) -> str:
-        tok = (authorization or "").removeprefix("Bearer ").strip()
-        return _check(_role_for(tok), min_role)
+def _bearer(request: Request) -> str:
+    return (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+
+
+async def _authenticate(request: Request, min_role: str, allow_unlinked: bool = False) -> str:
+    """Token mode: the role of a shared token (self-host, one tenant). OIDC mode: a Keycloak
+    session -> its account; the request's DB scope becomes that account, so row-level security
+    fences every query the handler makes. Until a code host is linked only profile/linking routes
+    answer (the link gate)."""
+    if auth.AUTH_MODE != "oidc":
+        return _check(_role_for(_bearer(request) or request.cookies.get("sentinel_token")), min_role)
+    tok = request.cookies.get("sentinel_session") or _bearer(request)
+    refresh_tok = request.cookies.get("sentinel_refresh")
+    if not tok and not refresh_tok:
+        raise HTTPException(401, "sign in required")
+    try:
+        claims = auth.verify_user_token(tok or "")
+    except auth.AuthError as e:
+        # expired access token: renew silently from the refresh cookie (Keycloak decides whether
+        # the session is still alive), then hand the new cookies back on this response
+        if not refresh_tok:
+            raise HTTPException(401, str(e)) from e
+        try:
+            tokens = await asyncio.to_thread(auth.refresh, refresh_tok)
+            tok = tokens["access_token"]
+            claims = auth.verify_user_token(tok)
+        except (auth.AuthError, KeyError) as e2:
+            raise HTTPException(401, str(e2)) from e2
+        request.state.new_tokens = tokens
+    acct = await asyncio.to_thread(accounts.account_for_login, claims["sub"], claims.get("email"),
+                                   claims.get("name") or claims.get("preferred_username"))
+    if acct["status"] != "active":
+        raise HTTPException(403, "account suspended")
+    dao.set_scope(acct["id"])
+    request.state.account, request.state.claims, request.state.token = acct, claims, tok
+    if not allow_unlinked and not await asyncio.to_thread(accounts.linked_hosts, acct["id"]):
+        raise HTTPException(403, "link_required: link a GitHub or GitLab account first")
+    return "admin"     # an account administers its own tenant; platform admin is accounts.is_admin
+
+
+def _require(min_role: str, allow_unlinked: bool = False):
+    async def dep(request: Request) -> str:
+        return await _authenticate(request, min_role, allow_unlinked)
     return dep
+
+
+def _account_id(request: Request) -> str:
+    """The caller's account: their own in OIDC mode, the single legacy tenant in token mode."""
+    acct = getattr(request.state, "account", None)
+    return acct["id"] if acct else dao.LEGACY_ACCOUNT
+
+
+def _require_platform_admin(request: Request) -> None:
+    acct = getattr(request.state, "account", None)
+    if acct is not None and not acct.get("is_admin"):
+        raise HTTPException(403, "platform admin only")
 
 
 # ---------------------------------------------------------------- pipeline runner
@@ -193,8 +286,10 @@ def _clone(event: dict, run_id: str) -> str:
     # C2 defense-in-depth: GIT_ALLOW_PROTOCOL/protocol.ext.allow disable ext::/file://; '--' stops
     # an option-like url being read as a flag even if _validate_clone_url is somehow bypassed.
     env = {**os.environ, "GIT_ALLOW_PROTOCOL": "https", "GIT_TERMINAL_PROMPT": "0"}
+    # core.symlinks=false: a repo symlink is checked out as a plain file, so it cannot point the
+    # analysis tools (which read the tree on the host) at another run's workspace or a host file.
     r = subprocess.run(["git", "-c", "protocol.ext.allow=never", "-c", "core.longpaths=true",
-                        "clone", "--quiet", "--", url, ws],
+                        "-c", "core.symlinks=false", "clone", "--quiet", "--", url, ws],
                        capture_output=True, text=True, env=env)
     if r.returncode != 0:  # surface git's real stderr, not just the exit code (e.g. "Filename too long")
         raise RuntimeError(f"git clone failed (exit {r.returncode}): {(r.stderr or r.stdout or '').strip()[:400]}")
@@ -256,12 +351,20 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         loop.call_soon_threadsafe(_on_progress, run_id, p)
 
     try:
+        llm = _llm_config_for_run(run_id)      # before the clone: no key, no work
         ws = ws_override or await asyncio.to_thread(_clone, event, run_id)
+        if auth.AUTH_MODE == "oidc" and not ws_override:
+            mb = await asyncio.to_thread(_dir_mb, ws)
+            if mb > settings.MAX_REPO_MB:
+                raise RuntimeError(f"repository is {mb:.0f} MB, over the {settings.MAX_REPO_MB} MB limit")
+        # per-run sandbox container (docker mode); a no-op in local mode. Refusal fails the run.
+        await asyncio.to_thread(sandbox.open_run, run_id, ws, (event.get("repo") or {}).get("name"))
         _advance(run_id, "analyzing")
         structure, sly, _answer = await asyncio.to_thread(
             invoke_network, run_id, event, ws,
             host=settings.NEURO_SAN_HOST, port=settings.NEURO_SAN_PORT,
-            network=settings.NEURO_SAN_NETWORK, on_progress=on_progress)
+            network=settings.NEURO_SAN_NETWORK, on_progress=on_progress,
+            extra_sly={"llm_config": llm} if llm else None)
         _persist_contracts(run_id, sly)
         decision = (sly.get("decision") or {}).get("decision") \
             or (dao.get_decision(run_id) or {}).get("decision")
@@ -296,8 +399,40 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         dao.record_audit(run_id, actor="gateway", action="run_failed", payload={"error": msg})
         bus.publish(run_id, {"kind": "state_change", "state": "failed", "error": msg})
     finally:
+        try:
+            sandbox.close_run(run_id)
+        except Exception as e:   # never let teardown hide the run's real outcome
+            logger.warning("run %s: sandbox teardown failed: %s", run_id, e)
         if not ws_override:
             workspace.cleanup_workspace(run_id)
+
+
+def _dir_mb(path: str) -> float:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total / 1e6
+
+
+def _llm_config_for_run(run_id: str) -> dict | None:
+    """The LLM key this run may use, as neuro-san's sly_data.llm_config (BYOK).
+
+    OIDC mode: the run's repo key, else its account key — never the host's. Token mode with
+    LLM_KEY_SOURCE=sly_data: this install's own env key, through the same path. Otherwise None and
+    the LLM configs read the env key directly, as before."""
+    if auth.AUTH_MODE == "oidc":
+        run = dao.get_run(run_id) or {}
+        ct = accounts.llm_key_for(run.get("account_id"), run.get("repo_id"))
+        if not ct:
+            raise RuntimeError("no LLM key configured for this account — add one under Settings")
+        return {"nvidia_api_key": secretbox.open_(ct)}
+    if settings.LLM_KEY_SOURCE == "sly_data":
+        return {"nvidia_api_key": os.environ.get("NVIDIA_API_KEY", "")}
+    return None
 
 
 def _on_progress(run_id: str, p: dict) -> None:
@@ -333,15 +468,17 @@ _TASKS: set[asyncio.Task] = set()  # keep strong refs so background runs aren't 
 _RUN_TASKS: dict[str, asyncio.Task] = {}  # run_id -> task, so /stop can cancel a specific run
 
 
-def _start_run(event: dict, ws_override: str | None) -> str:
+def _start_run(event: dict, ws_override: str | None, repo_id: str | None = None) -> str:
     tt = event["target_transition"]
     run_id = str(uuid.uuid4())
     stored = copy.deepcopy(event)  # H2: DB/API copy with credentials stripped from repo.url
     repo = stored.get("repo") or {}
     if repo.get("url"):
         repo["url"] = _redact_url(repo["url"])
+    # account_id is filled by the DB from the request's scope (0007 trigger), never by the caller
     dao.insert_run(run_id, event=stored, source=event.get("source", "manual"),
-                   repo=event["repo"]["name"], from_env=tt["from_env"], to_env=tt["to_env"])
+                   repo=event["repo"]["name"], from_env=tt["from_env"], to_env=tt["to_env"],
+                   repo_id=repo_id)
     dao.record_audit(run_id, actor="gateway", action="run_received",
                      payload={"event_id": event["event_id"]})
     task = asyncio.create_task(_run_pipeline(run_id, event, ws_override))  # REAL event -> clone
@@ -354,21 +491,26 @@ def _start_run(event: dict, ws_override: str | None) -> str:
 # ---------------------------------------------------------------- endpoints
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"status": "ok", "open_mode": settings.OPEN_MODE}  # open_mode drives the SPA login gate
+    # open_mode/auth_mode drive the SPA's login gate
+    return {"status": "ok", "open_mode": settings.OPEN_MODE and auth.AUTH_MODE != "oidc",
+            "auth_mode": auth.AUTH_MODE}
 
 
 @app.get("/api/v1/whoami")
-def whoami(request: Request, response: Response, role: str = Depends(_require("viewer"))) -> dict:
+def whoami(request: Request, response: Response,
+           role: str = Depends(_require("viewer", allow_unlinked=True))) -> dict:
     """Verify a token and return its role (401 if invalid). SPA login gate calls this.
 
     Also drops the token in an HttpOnly cookie so the SSE stream authenticates without a URL token
     (EventSource can't send an Authorization header). Secure flag follows the request scheme.
     """
-    tok = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if auth.AUTH_MODE == "oidc":
+        return {"role": role, "open_mode": False, "auth_mode": "oidc", **_me(request)}
+    tok = _bearer(request)
     if tok:  # not OPEN_MODE
         response.set_cookie("sentinel_token", tok, httponly=True, samesite="lax",
                             secure=request.url.scheme == "https", path="/")
-    return {"role": role, "open_mode": settings.OPEN_MODE}
+    return {"role": role, "open_mode": settings.OPEN_MODE, "auth_mode": "tokens"}
 
 
 @app.post("/api/v1/logout")
@@ -378,7 +520,7 @@ def logout(response: Response) -> dict:
 
 
 @app.post("/api/v1/simulate", status_code=202)
-async def simulate(body: SimulateBody, _role: str = Depends(_require("admin"))) -> dict:
+async def simulate(body: SimulateBody, request: Request, _role: str = Depends(_require("admin"))) -> dict:
     event = body.event
     _validate_event(event)
     if not body.repo_workspace and not (event.get("repo") or {}).get("url"):
@@ -389,7 +531,15 @@ async def simulate(body: SimulateBody, _role: str = Depends(_require("admin"))) 
     if existing:  # idempotent intake — same event_id returns the prior run
         run = dao.get_run(existing) or {}
         return {"run_id": existing, "state": run.get("state"), "idempotent": True}
-    run_id = _start_run(event, body.repo_workspace)
+    repo_id = None
+    if auth.AUTH_MODE == "oidc":
+        # hosted: only a repo this account registered (and proved it administers) can be run
+        if body.repo_workspace:
+            raise HTTPException(400, "repo_workspace is not available in hosted mode")
+        reg = _registered_repo_for(event, _account_id(request))
+        repo_id = reg["id"]
+        _enforce_quota(_account_id(request), repo_id)
+    run_id = _start_run(event, body.repo_workspace, repo_id)
     return {"run_id": run_id, "state": "received"}
 
 
@@ -432,9 +582,7 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
 async def run_events(run_id: str, request: Request) -> EventSourceResponse:
     # EventSource can't send an Authorization header, so it rides the HttpOnly cookie set by whoami
     # (same-origin). Header fallback kept for curl/tests.
-    tok = request.cookies.get("sentinel_token") \
-        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-    _check(_role_for(tok), "viewer")
+    await _authenticate(request, "viewer")
     if not dao.get_run(run_id):
         raise HTTPException(404, "run not found")
 
@@ -586,6 +734,8 @@ async def generate_tests(run_id: str, _role: str = Depends(_require("approver"))
     event = run.get("event") or {}
     ws = await asyncio.to_thread(_clone, event, f"{run_id}-testgen")
     try:
+        # keyed by run_id: the coded tools only ever see sly_data["run_id"]
+        await asyncio.to_thread(sandbox.open_run, run_id, ws, (event.get("repo") or {}).get("name"))
         last_error = None
         # One retry: generation is advisory, and the provider returns intermittent 500s that kill
         # a run mid-loop (see docs/model-evaluation.md §8). Retrying a non-gating flow is cheap;
@@ -608,6 +758,10 @@ async def generate_tests(run_id: str, _role: str = Depends(_require("approver"))
                          payload={"proposals": len(proposals), "error": last_error})
         return {"run_id": run_id, "proposals": proposals, "error": last_error}
     finally:
+        try:
+            sandbox.close_run(run_id)
+        except Exception as e:
+            logger.warning("run %s: sandbox teardown failed: %s", run_id, e)
         workspace.cleanup_workspace(f"{run_id}-testgen")
 
 
@@ -647,6 +801,374 @@ def resolve_approval(approval_id: int, body: ApprovalResolve,
 @app.get("/api/v1/audit")
 def audit(run_id: str | None = None, _role: str = Depends(_require("viewer"))) -> dict:
     return {"events": dao.list_audit(run_id)}
+
+
+# ---------------------------------------------------------------- hosted sign-in (OIDC, BFF)
+# The SPA never holds a token: the Gateway runs the code flow and keeps the Keycloak access token
+# in an HttpOnly cookie. When it expires the SPA sends the user to /auth/login again, which is
+# silent while the Keycloak SSO session lives.
+def _oidc_only() -> None:
+    if auth.AUTH_MODE != "oidc":
+        raise HTTPException(404)
+
+
+@app.get("/auth/login", include_in_schema=False)
+def auth_login() -> RedirectResponse:
+    _oidc_only()
+    state = uuid.uuid4().hex
+    r = RedirectResponse(auth.login_url(state))
+    r.set_cookie("sentinel_oauth_state", state, httponly=True, samesite="lax", max_age=600, path="/")
+    return r
+
+
+@app.get("/auth/callback", include_in_schema=False)
+def auth_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
+    _oidc_only()
+    if not state or not hmac.compare_digest(state, request.cookies.get("sentinel_oauth_state") or ""):
+        raise HTTPException(400, "login state mismatch — start again")
+    try:
+        tokens = auth.exchange_code(code)
+    except auth.AuthError as e:
+        raise HTTPException(400, str(e)) from e
+    r = RedirectResponse(auth.PUBLIC_URL + "/")
+    _set_session_cookies(r, tokens)
+    r.delete_cookie("sentinel_oauth_state", path="/")
+    return r
+
+
+@app.get("/auth/logout", include_in_schema=False)
+def auth_logout() -> RedirectResponse:
+    _oidc_only()
+    r = RedirectResponse(auth.logout_url())
+    r.delete_cookie("sentinel_session", path="/")
+    r.delete_cookie("sentinel_refresh", path="/")
+    return r
+
+
+@app.get("/auth/link/{provider}", include_in_schema=False)
+async def auth_link(provider: str, request: Request,
+                    _r: str = Depends(_require("viewer", allow_unlinked=True))) -> RedirectResponse:
+    _oidc_only()
+    if provider not in auth.HOSTS:
+        raise HTTPException(404)
+    return RedirectResponse(auth.link_url(request.state.claims, provider,
+                                          f"{auth.PUBLIC_URL}/auth/linked/{provider}"))
+
+
+@app.get("/auth/linked/{provider}", include_in_schema=False)
+async def auth_linked(provider: str, request: Request,
+                      _r: str = Depends(_require("viewer", allow_unlinked=True))) -> RedirectResponse:
+    _oidc_only()
+    await asyncio.to_thread(_refresh_links, request)
+    return RedirectResponse(auth.PUBLIC_URL + "/")
+
+
+def _refresh_links(request: Request) -> dict:
+    """Reconcile the account's code-host links with what Keycloak holds. A link that disappeared
+    (unlinked in Keycloak directly) suspends its repos now, not at the next CI run."""
+    acct, tok = request.state.account, request.state.token
+    with dao.scoped(acct["id"]):
+        known = accounts.linked_hosts(acct["id"])
+        errors = {}
+        for provider in auth.HOSTS:
+            host_tok = auth.broker_token(tok, provider)
+            if host_tok:
+                try:
+                    uid, name = auth.host_user(provider, host_tok)
+                    accounts.link_identity(acct["id"], provider, uid, name)
+                except (auth.AuthError, accounts.Conflict) as e:
+                    errors[provider] = str(e)
+            elif provider in known:
+                accounts.unlink(acct["id"], provider)
+        return {"links": accounts.linked_hosts(acct["id"]), "errors": errors}
+
+
+def _me(request: Request) -> dict:
+    acct = request.state.account
+    links = _refresh_links(request)
+    return {"account": {k: acct[k] for k in ("id", "email", "display_name", "is_admin", "retention_days")},
+            "links": {p: {"username": i["username"], "linked_at": i["linked_at"]}
+                      for p, i in links["links"].items()},
+            "link_errors": links["errors"], "link_required": not links["links"]}
+
+
+@app.post("/api/v1/me/links/{provider}/unlink")
+async def unlink_host(provider: str, request: Request,
+                      _r: str = Depends(_require("viewer", allow_unlinked=True))) -> dict:
+    """Unlink a code host: Keycloak forgets the stored token, and every repo registered through it
+    is suspended with its CI keys revoked, in one step."""
+    _oidc_only()
+    if provider not in auth.HOSTS:
+        raise HTTPException(404)
+    try:
+        await asyncio.to_thread(auth.remove_federated_identity, request.state.claims["sub"], provider)
+    except auth.AuthError as e:
+        raise HTTPException(502, str(e)) from e
+    suspended = await asyncio.to_thread(accounts.unlink, _account_id(request), provider)
+    dao.record_audit(None, actor=_account_id(request), action=f"unlinked_{provider}",
+                     payload={"repos_suspended": suspended})
+    return {"unlinked": provider, "repos_suspended": suspended}
+
+
+# ---------------------------------------------------------------- repos + CI keys
+class RepoBody(BaseModel):
+    url: str            # https://github.com/org/repo, https://gitlab.com/group/project, or any https git URL
+
+
+def _host_of(url: str) -> tuple[str, str]:
+    """(host kind, owner/name path) of a repo URL."""
+    p = urlsplit(url)
+    path = p.path.strip("/").removesuffix(".git")
+    host = (p.hostname or "").lower()
+    if host == "github.com":
+        return "github", path
+    if host == urlsplit(auth.GITLAB_URL).hostname:
+        return "gitlab", path
+    return "other", path
+
+
+@app.get("/api/v1/repos")
+def list_repos(request: Request, _r: str = Depends(_require("viewer"))) -> dict:
+    out = []
+    for r in accounts.list_repos(_account_id(request)):
+        r = {k: v for k, v in r.items() if k != "verify_token"} | \
+            ({"verify_token": r["verify_token"]} if r["status"] == "pending" else {})
+        r["keys"] = accounts.list_repo_keys(r["id"])
+        out.append(r)
+    return {"repos": out}
+
+
+@app.post("/api/v1/repos", status_code=201)
+async def register_repo(body: RepoBody, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    """Register a repo after proving the caller administers it on its host.
+
+    GitHub/GitLab: asked directly with the linked account's token. Any other host: the repo stays
+    `pending` until a `.sentinel-verify` file containing the returned token is on its default branch.
+    Token mode has no linked identities; the operator holding an admin token is trusted."""
+    url = body.url.strip()
+    try:
+        _validate_clone_url(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    kind, path = _host_of(url)
+    aid = _account_id(request)
+    try:
+        if auth.AUTH_MODE != "oidc":
+            repo = accounts.create_repo(aid, host=kind, full_name=path, clone_url=url, host_repo_id=None,
+                                        status="active", verified_via="operator")
+        elif kind in auth.HOSTS:
+            host_tok = await asyncio.to_thread(auth.broker_token, request.state.token, kind)
+            if not host_tok:
+                raise HTTPException(403, f"link your {kind} account first")
+            info = await asyncio.to_thread(auth.repo_ownership, kind, host_tok, path)
+            if not info["owner"]:
+                raise HTTPException(403, f"your {kind} account does not administer {path} "
+                                         f"({'admin' if kind == 'github' else 'Maintainer'} access required)")
+            repo = accounts.create_repo(aid, host=kind, full_name=info["full_name"], clone_url=info["clone_url"],
+                                        host_repo_id=info["host_repo_id"], status="active",
+                                        verified_via=info["via"])
+        else:
+            repo = accounts.create_repo(aid, host="other", full_name=path, clone_url=url, host_repo_id=None,
+                                        status="pending", verified_via=None,
+                                        verify_token="sentinel-verify-" + uuid.uuid4().hex)
+    except auth.AuthError as e:
+        raise HTTPException(403, str(e)) from e
+    except accounts.Conflict as e:
+        raise HTTPException(409, str(e)) from e
+    dao.record_audit(None, actor=aid, action="repo_registered", payload={"repo_id": repo["id"], "url": repo["clone_url"]})
+    return repo
+
+
+@app.post("/api/v1/repos/{repo_id}/verify")
+async def verify_repo(repo_id: str, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    """Check `.sentinel-verify` on the default branch of a pending (non-GitHub/GitLab) repo."""
+    repo = accounts.get_repo(repo_id)
+    if not repo:
+        raise HTTPException(404, "repo not found")
+    if repo["status"] != "pending":
+        return {"id": repo_id, "status": repo["status"]}
+    found = await asyncio.to_thread(_read_verify_file, repo["clone_url"], repo_id)
+    if (found or "").strip() != repo["verify_token"]:
+        raise HTTPException(409, "`.sentinel-verify` on the default branch does not contain the token yet")
+    accounts.activate_repo(repo_id, "verify_file")
+    return {"id": repo_id, "status": "active"}
+
+
+def _read_verify_file(url: str, repo_id: str) -> str | None:
+    ws = None
+    try:
+        ws = _clone({"repo": {"url": url}}, f"verify-{repo_id}")
+        f = Path(ws) / ".sentinel-verify"
+        return f.read_text(encoding="utf-8", errors="replace")[:200] if f.is_file() else None
+    except Exception:
+        return None
+    finally:
+        workspace.cleanup_workspace(f"verify-{repo_id}")
+
+
+@app.post("/api/v1/repos/{repo_id}/keys", status_code=201)
+def create_repo_key(repo_id: str, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    """A per-repo API key for CI platforms without OIDC (Jenkins). Shown once, stored hashed."""
+    repo = accounts.get_repo(repo_id)
+    if not repo or repo["status"] != "active":
+        raise HTTPException(404, "no active repo with that id")
+    kid, key = accounts.create_repo_key(repo_id)
+    dao.record_audit(None, actor=_account_id(request), action="repo_key_created", payload={"repo_id": repo_id, "key_id": kid})
+    return {"id": kid, "key": key, "note": "Store this now — it is not shown again."}
+
+
+@app.delete("/api/v1/repos/{repo_id}/keys/{key_id}")
+def revoke_repo_key(repo_id: str, key_id: int, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    if not accounts.get_repo(repo_id) or not accounts.revoke_repo_key(key_id, repo_id):
+        raise HTTPException(404, "key not found or already revoked")
+    dao.record_audit(None, actor=_account_id(request), action="repo_key_revoked", payload={"key_id": key_id})
+    return {"revoked": key_id}
+
+
+def _registered_repo_for(event: dict, account_id: str) -> dict:
+    url = accounts.normalize_url((event.get("repo") or {}).get("url") or "")
+    for r in accounts.list_repos(account_id):
+        if r["clone_url"] == url:
+            if r["status"] != "active":
+                raise HTTPException(403, f"repo is {r['status']}")
+            return r
+    raise HTTPException(403, "repo is not registered to this account")
+
+
+def _enforce_quota(account_id: str, repo_id: str | None) -> None:
+    if accounts.runs_since(account_id=account_id) >= settings.QUOTA_RUNS_PER_DAY_ACCOUNT:
+        raise HTTPException(429, f"account quota reached ({settings.QUOTA_RUNS_PER_DAY_ACCOUNT} runs / 24 h)")
+    if repo_id and accounts.runs_since(repo_id=repo_id) >= settings.QUOTA_RUNS_PER_DAY_REPO:
+        raise HTTPException(429, f"repo quota reached ({settings.QUOTA_RUNS_PER_DAY_REPO} runs / 24 h)")
+
+
+# ---------------------------------------------------------------- CI intake
+def _ci_repo(request: Request) -> dict:
+    """The registered repo a CI call speaks for: an OIDC job token (GitHub Actions, GitLab CI) or a
+    per-repo API key (Jenkins). Neither is a user session."""
+    key = (request.headers.get("x-sentinel-key") or "").strip()
+    if key:
+        repo = accounts.repo_for_key(key)
+        if not repo:
+            raise HTTPException(401, "unknown or revoked API key")
+    else:
+        tok = _bearer(request)
+        if not tok:
+            raise HTTPException(401, "CI token or X-Sentinel-Key required")
+        try:
+            claim = auth.verify_ci_token(tok)
+        except auth.AuthError as e:
+            raise HTTPException(401, str(e)) from e
+        repo = accounts.find_repo_by_host_id(claim["host"], claim["host_repo_id"])
+        if not repo:
+            raise HTTPException(403, f"{claim['path']} is not registered with Sentinel")
+    if repo["status"] != "active":
+        raise HTTPException(403, f"repo is {repo['status']}")
+    acct = accounts.get_account(repo["account_id"])
+    if not acct or acct["status"] != "active":
+        raise HTTPException(403, "account suspended")
+    dao.set_scope(repo["account_id"])
+    return repo
+
+
+class CiBody(BaseModel):
+    event: dict
+
+
+@app.post("/api/v1/ci/runs", status_code=202)
+async def ci_run(body: CiBody, request: Request) -> dict:
+    repo = _ci_repo(request)
+    event = body.event
+    _validate_event(event)
+    if accounts.normalize_url((event.get("repo") or {}).get("url") or "") != repo["clone_url"]:
+        raise HTTPException(403, "event.repo.url does not match the repo this credential belongs to")
+    existing = dao.find_run_by_event_id(event["event_id"])
+    if existing:
+        return {"run_id": existing, "state": (dao.get_run(existing) or {}).get("state"), "idempotent": True}
+    if auth.AUTH_MODE == "oidc":
+        _enforce_quota(repo["account_id"], repo["id"])
+    run_id = _start_run(event, None, repo["id"])
+    return {"run_id": run_id, "state": "received"}
+
+
+@app.get("/api/v1/ci/runs/{run_id}")
+def ci_run_status(run_id: str, request: Request) -> dict:
+    repo = _ci_repo(request)
+    run = dao.get_run(run_id)
+    if not run or run.get("repo_id") != repo["id"]:
+        raise HTTPException(404, "run not found")
+    report = (dao.get_payload("review_reports", run_id) or {}).get("payload") or {}
+    return {"run_id": run_id, "state": run["state"], "decision": dao.get_decision(run_id),
+            "review": {k: report.get(k) for k in ("pr_health_score", "recommendation", "counts",
+                                                  "executive_summary")},
+            "url": f"{auth.PUBLIC_URL}/runs/{run_id}"}
+
+
+# ---------------------------------------------------------------- BYOK
+class LlmKeyBody(BaseModel):
+    key: str
+    repo_id: str | None = None      # null = account-wide
+
+
+@app.get("/api/v1/llm-keys")
+def list_llm_keys(request: Request, _r: str = Depends(_require("viewer"))) -> dict:
+    return {"keys": accounts.list_llm_keys(_account_id(request))}
+
+
+@app.post("/api/v1/llm-keys", status_code=201)
+async def save_llm_key(body: LlmKeyBody, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    """Store an NVIDIA NIM key, after one real tool-call request proves it works. The key is
+    encrypted at rest and never returned."""
+    key = body.key.strip()
+    if body.repo_id and not accounts.get_repo(body.repo_id):
+        raise HTTPException(404, "repo not found")
+    from scripts.probe_models import config_model_ids, probe
+    ok, detail = await asyncio.to_thread(probe, config_model_ids()[0], key)
+    if not ok:
+        raise HTTPException(400, f"key did not work against the primary model: {detail}")
+    kid = accounts.save_llm_key(_account_id(request), body.repo_id, secretbox.seal(key), secretbox.hint(key))
+    dao.record_audit(None, actor=_account_id(request), action="llm_key_saved",
+                     payload={"key_id": kid, "repo_id": body.repo_id})
+    return {"id": kid, "hint": secretbox.hint(key)}
+
+
+@app.delete("/api/v1/llm-keys/{key_id}")
+def revoke_llm_key(key_id: int, request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    """Revoke a stored key; runs that would have used it fail until another is saved."""
+    if not accounts.revoke_llm_key(_account_id(request), key_id):
+        raise HTTPException(404, "key not found or already revoked")
+    dao.record_audit(None, actor=_account_id(request), action="llm_key_revoked", payload={"key_id": key_id})
+    return {"revoked": key_id}
+
+
+# ---------------------------------------------------------------- platform admin
+@app.get("/api/v1/admin/accounts")
+def admin_accounts(request: Request, _r: str = Depends(_require("admin"))) -> dict:
+    _require_platform_admin(request)
+    rows = accounts.list_accounts()
+    for a in rows:
+        a["runs_24h"] = accounts.runs_since(account_id=a["id"])
+    return {"accounts": rows}
+
+
+class AccountStatusBody(BaseModel):
+    status: str     # active | suspended
+
+
+@app.post("/api/v1/admin/accounts/{account_id}/status")
+def admin_set_status(account_id: str, body: AccountStatusBody, request: Request,
+                     _r: str = Depends(_require("admin"))) -> dict:
+    """Suspend or reactivate an account. Checked on every request, so it takes effect at once."""
+    _require_platform_admin(request)
+    if body.status not in ("active", "suspended"):
+        raise HTTPException(400, "status must be active|suspended")
+    if account_id == _account_id(request):
+        raise HTTPException(400, "you cannot change your own status")
+    if not accounts.set_account_status(account_id, body.status):
+        raise HTTPException(404, "account not found")
+    dao.record_audit(None, actor=_account_id(request), action=f"account_{body.status}",
+                     payload={"account_id": account_id})
+    return {"id": account_id, "status": body.status}
 
 
 # ---------------------------------------------------------------- SPA (06 §11)

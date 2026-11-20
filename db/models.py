@@ -28,6 +28,68 @@ runs = Table(
     Column("created_at", _TS, nullable=False, server_default=func.now()),
     Column("finished_at", _TS),
     Column("sentinel_version", Text),   # git SHA of the code that judged this run (0005)
+    Column("account_id", _UUID),        # tenant (0006); defaults to the legacy account in the DB
+    Column("repo_id", _UUID),           # registered repo, when the run came through CI intake
+)
+
+# ---- tenancy (0006) — every row below is also fenced by row-level security (0007) ----
+accounts = Table(
+    "accounts", metadata,
+    Column("id", _UUID, primary_key=True),
+    Column("email", Text),
+    Column("display_name", Text),
+    Column("status", Text, nullable=False, server_default="active"),   # active | suspended
+    Column("is_admin", Boolean, nullable=False, server_default="false"),
+    Column("retention_days", Integer, nullable=False, server_default="90"),
+    Column("created_at", _TS, server_default=func.now()),
+)
+
+identities = Table(
+    "identities", metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("account_id", _UUID, nullable=False),
+    Column("provider", Text, nullable=False),        # keycloak | github | gitlab
+    Column("subject", Text, nullable=False),         # provider's immutable user id
+    Column("username", Text),
+    Column("linked_at", _TS, server_default=func.now()),
+    Column("unlinked_at", _TS),
+)
+
+repos = Table(
+    "repos", metadata,
+    Column("id", _UUID, primary_key=True),
+    Column("account_id", _UUID, nullable=False),
+    Column("host", Text, nullable=False),            # github | gitlab | other
+    Column("host_repo_id", Text),                    # immutable host id; null for 'other'
+    Column("full_name", Text, nullable=False),
+    Column("clone_url", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default="pending"),  # pending | active | suspended
+    Column("verified_via", Text),                    # admin | maintainer | verify_file
+    Column("verify_token", Text),
+    Column("created_at", _TS, server_default=func.now()),
+)
+
+repo_keys = Table(
+    "repo_keys", metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("repo_id", _UUID, nullable=False),
+    Column("key_hash", Text, nullable=False),        # sha256 of the key; the key itself is shown once
+    Column("prefix", Text, nullable=False),
+    Column("created_at", _TS, server_default=func.now()),
+    Column("revoked_at", _TS),
+)
+
+llm_keys = Table(
+    "llm_keys", metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("account_id", _UUID, nullable=False),
+    Column("repo_id", _UUID),                        # null = account-wide key
+    Column("provider", Text, nullable=False, server_default="nvidia"),
+    Column("ciphertext", Text, nullable=False),      # Fernet, key-encryption key SENTINEL_SECRET_KEY
+    Column("hint", Text),                            # last 4 characters, for the UI
+    Column("validated_at", _TS),
+    Column("created_at", _TS, server_default=func.now()),
+    Column("revoked_at", _TS),
 )
 
 review_reports = Table(
@@ -159,6 +221,7 @@ incidents = Table(
     Column("kind", Text, nullable=False),
     Column("occurred_at", _TS, nullable=False),
     Column("detail", JSONB),
+    Column("account_id", _UUID),      # 0006
 )
 
 outcomes = Table(
@@ -178,6 +241,7 @@ audit_events = Table(
     Column("action", Text, nullable=False),
     Column("payload", JSONB),
     Column("at", _TS, nullable=False, server_default=func.now()),
+    Column("account_id", _UUID),      # usage log per account (0006)
 )
 
 notifications = Table(

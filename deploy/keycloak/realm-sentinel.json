@@ -1,0 +1,108 @@
+{
+  "realm": "sentinel",
+  "enabled": true,
+  "displayName": "Sentinel",
+  "registrationAllowed": true,
+  "registrationEmailAsUsername": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "verifyEmail": true,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "maxDeltaTimeSeconds": 43200,
+  "passwordPolicy": "length(12) and notUsername and notEmail",
+  "otpPolicyType": "totp",
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 86400,
+  "smtpServer": {
+    "host": "${SMTP_HOST:}",
+    "port": "${SMTP_PORT:587}",
+    "from": "${SMTP_FROM:}",
+    "auth": "${SMTP_AUTH:true}",
+    "user": "${SMTP_USER:}",
+    "password": "${SMTP_PASSWORD:}",
+    "starttls": "true"
+  },
+  "defaultRole": {
+    "name": "default-roles-sentinel",
+    "composite": true,
+    "composites": {
+      "realm": ["offline_access", "uma_authorization"],
+      "client": {
+        "account": ["view-profile", "manage-account", "manage-account-links"],
+        "broker": ["read-token"]
+      }
+    }
+  },
+  "clients": [
+    {
+      "clientId": "sentinel-gateway",
+      "name": "Sentinel Gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_CLIENT_SECRET}",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "redirectUris": ["${PUBLIC_URL:http://localhost:8000}/*"],
+      "webOrigins": ["${PUBLIC_URL:http://localhost:8000}"],
+      "attributes": {
+        "post.logout.redirect.uris": "${PUBLIC_URL:http://localhost:8000}/*",
+        "pkce.code.challenge.method": ""
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-sentinel-gateway",
+      "enabled": true,
+      "serviceAccountClientId": "sentinel-gateway",
+      "clientRoles": {
+        "realm-management": ["view-users", "manage-users"]
+      }
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "github",
+      "displayName": "GitHub",
+      "providerId": "github",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": true,
+      "addReadTokenRoleOnCreate": true,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "${GITHUB_OAUTH_CLIENT_ID:unset}",
+        "clientSecret": "${GITHUB_OAUTH_CLIENT_SECRET:unset}",
+        "defaultScope": "${GITHUB_OAUTH_SCOPE:read:user user:email}",
+        "syncMode": "IMPORT"
+      }
+    },
+    {
+      "alias": "gitlab",
+      "displayName": "GitLab",
+      "providerId": "gitlab",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": true,
+      "addReadTokenRoleOnCreate": true,
+      "firstBrokerLoginFlowAlias": "first broker login",
+      "config": {
+        "clientId": "${GITLAB_OAUTH_CLIENT_ID:unset}",
+        "clientSecret": "${GITLAB_OAUTH_CLIENT_SECRET:unset}",
+        "defaultScope": "openid read_user read_api",
+        "syncMode": "IMPORT"
+      }
+    }
+  ]
+}

@@ -18,7 +18,7 @@ class FakeDB:
     def __init__(self):
         self.runs, self.decisions, self.approvals, self.audit = {}, {}, [], []
 
-    def insert_run(self, run_id, event, source, repo, from_env, to_env, state="received"):
+    def insert_run(self, run_id, event, source, repo, from_env, to_env, state="received", repo_id=None):
         self.runs[run_id] = {"run_id": run_id, "event": event, "source": source, "repo": repo,
                              "from_env": from_env, "to_env": to_env, "state": state,
                              "finished_at": None, "created_at": "t"}
@@ -57,7 +57,7 @@ class FakeDB:
         return []
 
 
-def _fake_invoke(run_id, event, ws, *, host, port, network, on_progress=None):
+def _fake_invoke(run_id, event, ws, *, host, port, network, on_progress=None, extra_sly=None):
     for stage in ("change_analysis_agent", "security_review_agent", "code_quality_agent",
                   "test_runner", "risk_scoring_agent", "promotion_gating_agent"):
         if on_progress:

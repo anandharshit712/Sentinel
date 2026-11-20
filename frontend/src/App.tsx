@@ -6,6 +6,7 @@ import {
 } from './lib'
 import RunDetailRoute, { RunDetailPane, ApprovalControls } from './RunDetail'
 import { Calibration } from './Calibration'
+import { Settings, Admin, Privacy, LinkPage } from './Settings'
 
 export default function App() {
   return (
@@ -19,6 +20,9 @@ export default function App() {
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/calibration" element={<Calibration />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/privacy" element={<Privacy />} />
           </Routes>
         </Shell>
       </Gate>
@@ -27,10 +31,21 @@ export default function App() {
 }
 
 // Token mode: block the app behind a login until a valid token is entered. OPEN_MODE passes straight through.
+// OIDC mode: the Gateway's session cookie decides; until a code host is linked only the link page renders.
 function Gate({ children }: { children: React.ReactNode }) {
-  const { openMode, verified } = useAuth()
-  if (openMode === null)
+  const { openMode, verified, authMode, me, authError, logout } = useAuth()
+  if (authMode === 'oidc' && authError)
+    return (
+      <div className="grid min-h-screen place-items-center px-5">
+        <div role="alert" className="max-w-sm rounded-md border border-red-500/40 bg-(--panel) p-6 text-sm">
+          <p className="text-red-300">{authError}</p>
+          <button onClick={logout} className="mt-4 rounded-sm border border-(--line) px-3 py-1.5 text-[10px] uppercase tracking-wider text-(--ink-dim) hover:text-(--ink)">sign out</button>
+        </div>
+      </div>
+    )
+  if (openMode === null || (authMode === 'oidc' && !me))
     return <div className="grid min-h-screen place-items-center text-xs uppercase tracking-widest text-(--ink-dim)">connecting…</div>
+  if (authMode === 'oidc' && me?.link_required) return <LinkPage />
   if (!openMode && !verified) return <LoginGate />
   return <>{children}</>
 }
@@ -71,7 +86,7 @@ function LoginGate() {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  const { role, token, openMode, set, logout } = useAuth()
+  const { role, token, openMode, set, logout, me } = useAuth()
   const nav = ({ isActive }: { isActive: boolean }) =>
     `text-xs uppercase tracking-widest transition-colors ${isActive ? 'text-(--signal)' : 'text-(--ink-dim) hover:text-(--ink)'}`
   return (
@@ -85,6 +100,9 @@ function Shell({ children }: { children: React.ReactNode }) {
         <NavLink to="/approvals" className={nav}>Approvals</NavLink>
         <NavLink to="/audit" className={nav}>Audit</NavLink>
         <NavLink to="/calibration" className={nav}>Calibration</NavLink>
+        <NavLink to="/settings" className={nav}>Settings</NavLink>
+        {me?.account.is_admin && <NavLink to="/admin" className={nav}>Admin</NavLink>}
+        <NavLink to="/privacy" className={nav}>Privacy</NavLink>
         <span className="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-(--ink-dim)">
           <span className="hidden items-center gap-1.5 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-(--signal)" style={{ animation: 'blink 1.4s steps(2) infinite' }} />system live
@@ -102,8 +120,10 @@ function Shell({ children }: { children: React.ReactNode }) {
             </>
           ) : (
             <>
-              <span className="rounded-sm border border-(--line) bg-(--bg-2) px-2 py-1 text-[10px] uppercase tracking-wider text-(--signal)">{role}</span>
-              <button onClick={logout} className="rounded-sm border border-(--line) px-2 py-1 text-[10px] uppercase tracking-wider text-(--ink-dim) hover:border-red-500/40 hover:text-red-300">logout</button>
+              {me
+                ? <span className="normal-case tracking-normal text-(--ink)">{me.account.email || me.account.display_name}</span>
+                : <span className="rounded-sm border border-(--line) bg-(--bg-2) px-2 py-1 text-[10px] uppercase tracking-wider text-(--signal)">{role}</span>}
+              <button onClick={logout} className="rounded-sm border border-(--line) px-2 py-1 text-[10px] uppercase tracking-wider text-(--ink-dim) hover:border-red-500/40 hover:text-red-300">{me ? 'sign out' : 'logout'}</button>
             </>
           )}
         </span>

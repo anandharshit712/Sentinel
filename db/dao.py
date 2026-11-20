@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import Engine, create_engine, func, select
+from sqlalchemy import Engine, create_engine, event, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db import models
@@ -23,10 +25,46 @@ from db import models
 load_dotenv()
 
 
+# Tenancy scope for row-level security (migration 0007). Every transaction tells Postgres whose
+# rows it may see: an account uuid, '*' for system work, or '' which sees nothing.
+#
+# The default is '*' so the neuro-san coded tools, the verify scripts and a self-hosted install in
+# token mode behave as before (one tenant). The Gateway in AUTH_MODE=oidc narrows it per request,
+# starting from '' so a handler that forgets to authenticate fails closed. contextvars follow
+# asyncio tasks and asyncio.to_thread, so a run started from a request stays in its account.
+LEGACY_ACCOUNT = "00000000-0000-0000-0000-000000000001"
+SYSTEM_SCOPE = "*"
+_scope: ContextVar[str] = ContextVar("sentinel_account_scope", default=SYSTEM_SCOPE)
+
+
+def set_scope(account_id: str) -> None:
+    """'*' = system, '' = deny, otherwise an account uuid. Applies to the current context."""
+    _scope.set(account_id)
+
+
+def current_scope() -> str:
+    return _scope.get()
+
+
+@contextmanager
+def scoped(account_id: str):
+    tok = _scope.set(account_id)
+    try:
+        yield
+    finally:
+        _scope.reset(tok)
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     url = os.environ["DATABASE_URL"]
-    return create_engine(url, pool_pre_ping=True, future=True)
+    eng = create_engine(url, pool_pre_ping=True, future=True)
+
+    @event.listens_for(eng, "begin")
+    def _apply_scope(conn) -> None:   # transaction-local, so a pooled connection never leaks it
+        conn.exec_driver_sql("SELECT set_config('app.account_id', %(s)s, true)", {"s": _scope.get()})
+
+    return eng
 
 
 @lru_cache(maxsize=1)
@@ -47,10 +85,10 @@ def sentinel_version() -> str:
 
 
 def insert_run(run_id: str, event: dict, source: str, repo: str,
-               from_env: str, to_env: str, state: str = "received") -> None:
+               from_env: str, to_env: str, state: str = "received", repo_id: str | None = None) -> None:
     with get_engine().begin() as c:
         c.execute(models.runs.insert().values(
-            run_id=run_id, event=event, source=source, repo=repo,
+            run_id=run_id, event=event, source=source, repo=repo, repo_id=repo_id,
             from_env=from_env, to_env=to_env, state=state, sentinel_version=sentinel_version()))
 
 

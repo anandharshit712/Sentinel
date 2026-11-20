@@ -189,3 +189,37 @@ export interface AuditEvent {
   payload?: any
   at?: string
 }
+
+// ---------------------------------------------------------------- accounts / tenancy (Phase 4)
+export interface Me {
+  role: string
+  auth_mode: 'oidc'
+  account: { id: string; email?: string; display_name?: string; is_admin: boolean; retention_days?: number }
+  links: Record<string, { username: string; linked_at?: string }>
+  link_errors: Record<string, string>
+  link_required: boolean
+}
+
+export interface RepoKey { id: number; prefix: string; created_at?: string; revoked_at?: string | null }
+
+export interface Repo {
+  id: string
+  host: string
+  full_name: string
+  clone_url: string
+  status: 'pending' | 'active' | 'suspended'
+  verified_via?: string | null
+  verify_token?: string
+  created_at?: string
+  keys: RepoKey[]
+}
+
+export interface LlmKey {
+  id: number; repo_id?: string | null; provider: string; hint: string
+  validated_at?: string; created_at?: string
+}
+
+export interface AccountRow {
+  id: string; email?: string; display_name?: string; status: string; is_admin: boolean
+  created_at?: string; runs_24h: number; retention_days?: number
+}

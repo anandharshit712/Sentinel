@@ -24,6 +24,9 @@ SQLAlchemy>=2.0,<3.0
 alembic>=1.18
 psycopg[binary]>=3.3
 
+# --- Hosted mode (12 §5): verify Keycloak + CI OIDC tokens; `cryptography` also encrypts BYOK keys ---
+pyjwt[crypto]>=2.8
+
 # --- Data contracts ---
 jsonschema>=4.0
 
