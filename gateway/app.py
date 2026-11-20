@@ -954,7 +954,17 @@ async def register_repo(body: RepoBody, request: Request, _r: str = Depends(_req
     aid = _account_id(request)
     try:
         if auth.AUTH_MODE != "oidc":
-            repo = accounts.create_repo(aid, host=kind, full_name=path, clone_url=url, host_repo_id=None,
+            # the operator is trusted; for a public GitHub/GitLab repo still record the host's
+            # immutable id (anonymous lookup) so CI OIDC job tokens can be matched to it
+            info = None
+            if kind in auth.HOSTS:
+                try:
+                    info = await asyncio.to_thread(auth.repo_ownership, kind, "", path)
+                except auth.AuthError:
+                    info = None      # private or unreachable: API-key CI only
+            repo = accounts.create_repo(aid, host=kind, full_name=info["full_name"] if info else path,
+                                        clone_url=info["clone_url"] if info else url,
+                                        host_repo_id=info["host_repo_id"] if info else None,
                                         status="active", verified_via="operator")
         elif kind in auth.HOSTS:
             host_tok = await asyncio.to_thread(auth.broker_token, request.state.token, kind)

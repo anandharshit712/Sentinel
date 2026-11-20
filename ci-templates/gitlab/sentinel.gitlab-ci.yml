@@ -1,0 +1,85 @@
+# Sentinel promotion gate for GitLab CI — fails the merge request pipeline unless Sentinel decides
+# "promote". Include it from .gitlab-ci.yml:
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/anandharshit712/Sentinel/main/ci-templates/gitlab/sentinel.gitlab-ci.yml
+#   (or copy this file into the project and `include: local:`)
+#
+# Setup (README "CI integration"):
+#   1. Register the project in Sentinel (Settings → Repositories). Hosted Sentinel checks that your
+#      linked GitLab account is a Maintainer.
+#   2. CI/CD variable SENTINEL_GATEWAY_URL (not masked, not sensitive).
+#   3. Nothing else for auth: the job presents a GitLab OIDC id_token with audience "sentinel".
+#      Fallback: masked variable SENTINEL_API_KEY = a per-repo key from Sentinel.
+#   4. Optional MR comment: masked variable SENTINEL_GITLAB_TOKEN = a project access token with
+#      `api` scope (Reporter). Without it the result is only in the job log.
+#
+# Self-managed runners: never let merge requests from forks run this on a shell/docker runner you
+# own without approval — an MR could run code on your machine.
+
+sentinel-gate:
+  stage: test
+  image: alpine:3.20
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $SENTINEL_GATEWAY_URL
+  id_tokens:
+    SENTINEL_ID_TOKEN:
+      aud: sentinel
+  variables:
+    FROM_ENV: dev
+    TO_ENV: test
+    POLL_TIMEOUT_SECONDS: "1500"
+  before_script:
+    - apk add --no-cache curl jq >/dev/null
+  script:
+    - |
+      set -eu
+      GW="${SENTINEL_GATEWAY_URL%/}"
+      auth() {
+        if [ -n "${SENTINEL_API_KEY:-}" ]; then printf 'X-Sentinel-Key: %s' "$SENTINEL_API_KEY"
+        else printf 'Authorization: Bearer %s' "$SENTINEL_ID_TOKEN"; fi
+      }
+      # job token clone URL: lets Sentinel fetch a private project for the life of this job
+      REPO_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      event=$(jq -nc \
+        --arg eid "gl-${CI_PROJECT_ID}-${CI_PIPELINE_ID}-${CI_JOB_ID}" \
+        --arg url "$REPO_URL" --arg name "$CI_PROJECT_PATH" \
+        --arg base "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --arg head "$CI_COMMIT_SHA" \
+        --arg branch "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" --arg title "$CI_MERGE_REQUEST_TITLE" \
+        --arg author "$GITLAB_USER_LOGIN" --arg from "$FROM_ENV" --arg to "$TO_ENV" \
+        --arg dflt "$CI_DEFAULT_BRANCH" \
+        '{event_id:$eid, source:"gitlab",
+          repo:{url:$url, name:$name, default_branch:$dflt},
+          change:{base_sha:$base, head_sha:$head, branch:$branch, title:$title, author:$author},
+          target_transition:{from_env:$from, to_env:$to}, requested_by:$author}')
+      resp=$(curl -sS -X POST "$GW/api/v1/ci/runs" -H "$(auth)" -H "Content-Type: application/json" \
+             -d "{\"event\": $event}")
+      run_id=$(echo "$resp" | jq -r '.run_id // empty')
+      [ -n "$run_id" ] || { echo "Sentinel refused the run: $resp"; exit 1; }
+      echo "Sentinel run: $GW/runs/$run_id"
+      deadline=$(( $(date +%s) + POLL_TIMEOUT_SECONDS )); state=""
+      while [ "$(date +%s)" -lt "$deadline" ]; do
+        detail=$(curl -sf "$GW/api/v1/ci/runs/$run_id" -H "$(auth)" || echo '{}')
+        state=$(echo "$detail" | jq -r '.state // "unknown"'); echo "  state=$state"
+        if [ "$state" = "done" ] || [ "$state" = "failed" ]; then break; fi
+        sleep 15
+      done
+      decision=$(echo "$detail" | jq -r '.decision.decision // "none"')
+      crit=$(echo "$detail" | jq -r '.review.counts.critical // 0')
+      high=$(echo "$detail" | jq -r '.review.counts.high // 0')
+      body=$(printf '<!-- sentinel-gate -->\n### Sentinel gate: `%s`\n\n%s critical / %s high findings. Full report: %s\n\n%s' \
+        "$decision" "$crit" "$high" "$GW/runs/$run_id" "$(echo "$detail" | jq -r '.review.executive_summary // ""' | head -c 1500)")
+      echo "$body"
+      if [ -n "${SENTINEL_GITLAB_TOKEN:-}" ]; then
+        API="$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes"
+        note=$(curl -sf -H "PRIVATE-TOKEN: $SENTINEL_GITLAB_TOKEN" "$API?per_page=100" \
+               | jq -r '[.[] | select(.body | startswith("<!-- sentinel-gate -->"))][0].id // empty' || true)
+        if [ -n "$note" ]; then
+          curl -sf -X PUT -H "PRIVATE-TOKEN: $SENTINEL_GITLAB_TOKEN" --data-urlencode "body=$body" "$API/$note" >/dev/null || true
+        else
+          curl -sf -X POST -H "PRIVATE-TOKEN: $SENTINEL_GITLAB_TOKEN" --data-urlencode "body=$body" "$API" >/dev/null || true
+        fi
+      fi
+      [ "$state" = "done" ] || { echo "Sentinel run did not finish (state=$state)"; exit 1; }
+      [ "$decision" = "promote" ] || { echo "Sentinel decided '$decision'"; exit 1; }
+      echo "Sentinel: promote"

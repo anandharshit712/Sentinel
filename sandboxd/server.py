@@ -103,6 +103,28 @@ def map_env(env: Dict[str, str], mounts: List[tuple]) -> Dict[str, str]:
     return out
 
 
+def _workspace_mounts(real: str, real_scratch: str) -> List[str]:
+    """Mount this run's workspace + scratch dir, and nothing else.
+
+    Host-native (sandboxd on the host): plain bind mounts of the two directories.
+    Compose (sandboxd itself in a container): a bind path inside sandboxd means nothing to the
+    Docker daemon, so the shared named volume is mounted with `volume-subpath` (Docker Engine 26+)
+    — still only the run's own two subdirectories, never the whole volume.
+        SANDBOX_WORKSPACE_VOLUME=sentinel_workspaces   SANDBOX_WORKSPACE_MOUNT=/workspaces
+    """
+    vol = os.environ.get("SANDBOX_WORKSPACE_VOLUME", "").strip()
+    if not vol:
+        return ["-v", f"{real}:{WORK}", "-v", f"{real_scratch}:{SCRATCH}"]
+    root = os.path.realpath(os.environ.get("SANDBOX_WORKSPACE_MOUNT", "/workspaces"))
+    out = []
+    for path, dst in ((real, WORK), (real_scratch, SCRATCH)):
+        sub = os.path.relpath(path, root).replace("\\", "/")
+        if sub.startswith("..") or "/" in sub:   # one level under the volume root, nothing else
+            raise PermissionError(f"{path!r} is not a direct child of {root!r}")
+        out += ["--mount", f"type=volume,src={vol},dst={dst},volume-subpath={sub}"]
+    return out
+
+
 # ---------------------------------------------------------------- operations
 def create(req: Dict[str, Any]) -> Dict[str, Any]:
     rid, ws = str(req.get("run_id") or ""), str(req.get("workspace") or "")
@@ -135,8 +157,7 @@ def create(req: Dict[str, Any]) -> Dict[str, Any]:
             "--cpus", cpus, "--memory", mem, "--memory-swap", mem, "--pids-limit", PIDS_LIMIT,
             "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
             "--read-only", "--tmpfs", "/tmp:rw,exec,size=512m",
-            "-e", "HOME=/tmp", "-v", f"{real}:{WORK}", "-v", f"{real_scratch}:{SCRATCH}",
-            "-w", WORK]
+            "-e", "HOME=/tmp", *_workspace_mounts(real, real_scratch), "-w", WORK]
     if cache:                               # per-repo, never shared between repos
         args += ["-v", f"sentinel-cache-{cache}:/cache",
                  "-e", "PIP_CACHE_DIR=/cache/pip", "-e", "npm_config_cache=/cache/npm"]

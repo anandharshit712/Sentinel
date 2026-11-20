@@ -1,18 +1,19 @@
-# Sentinel promotion gate — runs on every PR, blocks merge unless Sentinel says "promote".
+# Sentinel promotion gate for GitHub Actions — blocks merge unless Sentinel decides "promote".
 #
-# Drop this file into any repo's .github/workflows/. It builds a DeliveryEvent from the PR
-# context and POSTs it to a running Sentinel Gateway's /api/v1/simulate, which clones the repo
-# server-side, runs the Neuro-SAN review/test/risk pipeline, and returns a promotion decision.
-# The job then polls the run and fails the check unless the decision is `promote`.
+# Copy this file into the repo's .github/workflows/. Setup (README "CI integration"):
+#   1. Register the repo in Sentinel (Settings → Repositories). Hosted Sentinel checks that your
+#      linked GitHub account administers it.
+#   2. Repository VARIABLE (not a secret — it is not sensitive):
+#        SENTINEL_GATEWAY_URL   e.g. https://sentinel.example.com
+#   3. Nothing else. The job proves which repo it is with a GitHub OIDC token (`id-token: write`),
+#      so no long-lived secret exists. Fallback for Sentinels that cannot reach GitHub's OIDC keys:
+#      repository SECRET SENTINEL_API_KEY = a per-repo key from Settings → Repositories.
 #
-# Required repo secrets:
-#   SENTINEL_GATEWAY_URL  base URL of a reachable Gateway, e.g. https://sentinel.example.com
-#                         (for local dev, expose scripts/run_gateway.py :8000 via a tunnel:
-#                          cloudflared tunnel --url http://localhost:8000)
-#   SENTINEL_TOKEN        an admin API token from the Gateway's API_TOKENS (simulate is admin-only)
+# The job is skipped entirely in repos without SENTINEL_GATEWAY_URL, and for fork PRs (a fork's
+# head SHA is not reachable from the base repo, and forks must not get this job's tokens).
 #
-# same-repo PRs only. The Gateway clones repo.url and needs BOTH base and head SHAs
-# reachable there; a fork's head SHA is not in the base repo, so fork PRs are skipped.
+# Self-hosted runners: never run this (or any) workflow on a self-hosted runner for a PUBLIC repo
+# without "require approval for all outside collaborators" — a PR could run code on your machine.
 
 name: Sentinel gate
 
@@ -24,34 +25,32 @@ on:
       base_sha: { description: base commit SHA, required: true }
       head_sha: { description: head commit SHA, required: true }
 
-# One in-flight gate per PR; a new push cancels the previous run.
+permissions:
+  contents: read
+  id-token: write        # mint the OIDC job token Sentinel verifies
+  pull-requests: write   # one PR comment, updated in place on every push
+
 concurrency:
   group: sentinel-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
-  # Which promotion this gate represents. Override per-repo if merging means a later stage.
-  FROM_ENV: dev
+  FROM_ENV: dev          # which promotion this gate represents
   TO_ENV: test
-  POLL_TIMEOUT_SECONDS: "1200"
+  POLL_TIMEOUT_SECONDS: "1500"
+  AUDIENCE: ${{ vars.SENTINEL_AUDIENCE || 'sentinel' }}
 
 jobs:
   gate:
+    if: ${{ vars.SENTINEL_GATEWAY_URL != '' && (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) }}
     runs-on: ubuntu-latest
     steps:
-      - name: Skip fork PRs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork
-        run: |
-          echo "::warning::Sentinel gate skips fork PRs (head SHA not reachable from base repo)."
-          exit 0
-
-      - name: Submit run and gate on the decision
-        # Skip fork PRs here too — the previous step's `exit 0` only ends that step, not the job.
-        if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
+      - name: Run Sentinel and gate on its decision
         env:
-          GW: ${{ secrets.SENTINEL_GATEWAY_URL }}
-          TOKEN: ${{ secrets.SENTINEL_TOKEN }}
+          GW: ${{ vars.SENTINEL_GATEWAY_URL }}
+          API_KEY: ${{ secrets.SENTINEL_API_KEY }}
           GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.head_sha }}
           PR_TITLE: ${{ github.event.pull_request.title || github.ref_name }}
@@ -59,64 +58,81 @@ jobs:
           PR_AUTHOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          [ -n "$GW" ] || { echo "::error::SENTINEL_GATEWAY_URL secret is not set"; exit 1; }
-          [ -n "$TOKEN" ] || { echo "::error::SENTINEL_TOKEN secret is not set"; exit 1; }
+          GW="${GW%/}"
 
-          # Authenticated clone URL so the Gateway can reach private repos (token expires with the job).
+          # Fresh credentials for every call: an OIDC job token lives minutes, a poll can take longer.
+          auth() {
+            if [ -n "$API_KEY" ]; then
+              printf 'X-Sentinel-Key: %s' "$API_KEY"
+            else
+              tok=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                    "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r '.value')
+              printf 'Authorization: Bearer %s' "$tok"
+            fi
+          }
+
+          # Authenticated clone URL so Sentinel can fetch a private repo; the token dies with this job.
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-
           event=$(jq -nc \
-            --arg eid "gha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --arg url "$REPO_URL" \
-            --arg name "$GITHUB_REPOSITORY" \
+            --arg eid "gha-${GITHUB_REPOSITORY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --arg url "$REPO_URL" --arg name "$GITHUB_REPOSITORY" \
             --arg base "$BASE_SHA" --arg head "$HEAD_SHA" \
             --arg branch "$PR_BRANCH" --arg title "$PR_TITLE" --arg author "$PR_AUTHOR" \
             --arg from "$FROM_ENV" --arg to "$TO_ENV" \
             '{event_id:$eid, source:"github",
               repo:{url:$url, name:$name, default_branch:"main"},
               change:{base_sha:$base, head_sha:$head, branch:$branch, title:$title, author:$author},
-              target_transition:{from_env:$from, to_env:$to},
-              requested_by:$author}')
+              target_transition:{from_env:$from, to_env:$to}, requested_by:$author}')
 
-          resp=$(curl -sf -X POST "$GW/api/v1/simulate" \
-            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-            -d "{\"event\": $event}")
-          run_id=$(echo "$resp" | jq -r '.run_id')
-          [ -n "$run_id" ] && [ "$run_id" != "null" ] || { echo "::error::no run_id in: $resp"; exit 1; }
+          resp=$(curl -sS -X POST "$GW/api/v1/ci/runs" -H "$(auth)" \
+                 -H "Content-Type: application/json" -d "{\"event\": $event}")
+          run_id=$(echo "$resp" | jq -r '.run_id // empty')
+          [ -n "$run_id" ] || { echo "::error::Sentinel refused the run: $resp"; exit 1; }
           echo "Sentinel run: $GW/runs/$run_id"
 
-          # Poll until the run reaches a terminal state.
           deadline=$(( $(date +%s) + POLL_TIMEOUT_SECONDS ))
           state=""
           while [ "$(date +%s)" -lt "$deadline" ]; do
-            detail=$(curl -sf "$GW/api/v1/runs/$run_id" -H "Authorization: Bearer $TOKEN")
-            state=$(echo "$detail" | jq -r '.run.state')
+            detail=$(curl -sf "$GW/api/v1/ci/runs/$run_id" -H "$(auth)" || echo '{}')
+            state=$(echo "$detail" | jq -r '.state // "unknown"')
             echo "  state=$state"
-            [ "$state" = "done" ] || [ "$state" = "failed" ] && break
-            sleep 10
+            if [ "$state" = "done" ] || [ "$state" = "failed" ]; then break; fi
+            sleep 15
           done
 
-          decision=$(echo "$detail" | jq -r '.decision.decision // "unknown"')
-          risk=$(echo "$detail" | jq -r '.risk_score.score // "n/a"')
-          crit=$(echo "$detail" | jq -r '.review_report.counts.critical // 0')
+          decision=$(echo "$detail" | jq -r '.decision.decision // "none"')
+          health=$(echo "$detail" | jq -r '.review.pr_health_score // "n/a"')
+          crit=$(echo "$detail" | jq -r '.review.counts.critical // 0')
+          high=$(echo "$detail" | jq -r '.review.counts.high // 0')
+          rule=$(echo "$detail" | jq -r '.decision.rule_fired // ""')
+          summary=$(echo "$detail" | jq -r '.review.executive_summary // ""' | head -c 1500)
 
           {
-            echo "## Sentinel gate"
+            echo "<!-- sentinel-gate -->"
+            echo "### Sentinel gate: \`$decision\`"
             echo ""
-            echo "| field | value |"
+            echo "| | |"
             echo "|---|---|"
-            echo "| decision | \`$decision\` |"
-            echo "| risk | $risk |"
-            echo "| critical findings | $crit |"
-            echo "| run | [$run_id]($GW/runs/$run_id) |"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "| decision | \`$decision\` ${rule:+(\`$rule\`)} |"
+            echo "| review health | $health |"
+            echo "| critical / high findings | $crit / $high |"
+            echo "| full report | $GW/runs/$run_id |"
+            echo ""
+            echo "$summary"
+          } > sentinel-comment.md
+          cat sentinel-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+          # One comment per PR, edited on every push rather than piling up.
+          if [ -n "$PR" ]; then
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body-file sentinel-comment.md 2>/dev/null \
+              || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file sentinel-comment.md \
+              || echo "::warning::could not post the PR comment"
+          fi
 
           if [ "$state" != "done" ]; then
-            echo "::error::Sentinel run did not finish (state=$state). See $GW/runs/$run_id"
-            exit 1
+            echo "::error::Sentinel run did not finish (state=$state): $GW/runs/$run_id"; exit 1
           fi
           if [ "$decision" != "promote" ]; then
-            echo "::error::Sentinel decision is '$decision' (risk $risk, $crit critical). Review at $GW/runs/$run_id"
-            exit 1
+            echo "::error::Sentinel decided '$decision' ($crit critical, $high high). Review: $GW/runs/$run_id"; exit 1
           fi
-          echo "Sentinel: promote ✅ (risk $risk)"
+          echo "Sentinel: promote"

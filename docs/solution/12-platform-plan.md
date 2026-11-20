@@ -123,7 +123,32 @@ passes only if its escape failed), and `verify_b4`/`verify_p3` in docker mode.
 
 ## 4. Phase 3 — Packaging
 
-_Filled in when the phase closes._
+- **One application image**, `deploy/app.Dockerfile`. The SPA is built in a Node stage and served
+  by the Gateway from one origin. The image runs as uid 10001, and the same image runs both the
+  Gateway (default command, which applies migrations first) and the neuro-san server. It never runs
+  repository code, because `SANDBOX_MODE=docker` hands that to sandboxd. `SENTINEL_VERSION` is a
+  build arg, baked into the image and stamped on every run.
+- **`deploy/sandboxd.Dockerfile`**: alpine + Python + the docker CLI. sandboxd is the only service
+  with the Docker socket; it is not published on any host port and requires `SANDBOXD_TOKEN`.
+- **`deploy/compose.yaml`.**
+  - Services with no profile form **core**: postgres 17, `sandbox-image` (builds the per-run image,
+    then exits), sandboxd, neuro-san and gateway (:8000).
+  - `--profile hosted` adds Keycloak 26 (:8180), which imports `deploy/keycloak/realm-sentinel.json`
+    and uses its own role and database on the same Postgres.
+  - Named volumes `pgdata` and `sentinel_workspaces`. Healthchecks gate the start order.
+- **Postgres init** (`deploy/postgres/init-sentinel.sh`) creates the application role as
+  `NOSUPERUSER NOBYPASSRLS`. A superuser would silently bypass row-level security, so the default
+  `POSTGRES_USER` must never be the application's role.
+- **Workspaces in compose.** The Gateway clones into the shared volume. sandboxd itself runs in a
+  container, so a bind path would mean nothing to the Docker daemon. Instead it mounts only the
+  run's own two subdirectories, using `--mount type=volume,…,volume-subpath=<run_id>`
+  (Docker Engine 26+).
+- **`.env.example`** documents every variable for both host-native and compose. Compose reads it
+  with `--env-file .env`, and refuses to start without `POSTGRES_PASSWORD`, `SENTINEL_DB_PASSWORD`
+  and `SANDBOXD_TOKEN`.
+- `run.ps1` (host-native dev) is unchanged.
+- **For the later deploy discussion:** a GCP free e2-micro (1 GB) cannot run this stack; an Oracle
+  A1 (4 OCPU / 24 GB, arm64) can. Every base image is multi-arch.
 
 ## 5. Phase 4 — Accounts, tenancy, BYOK
 
@@ -209,7 +234,31 @@ through the Gateway, isolated over HTTP.
 
 ## 6. Phase 5 — CI platforms
 
-_Filled in when the phase closes._
+All three templates post to `POST /api/v1/ci/runs` and poll `GET /api/v1/ci/runs/{id}`. Neither
+endpoint takes a user session: the credential identifies exactly one registered repo, and the
+event's clone URL has to be that repo's.
+
+| Platform | Credential | Comment back |
+|---|---|---|
+| GitHub Actions (`.github/workflows/sentinel-gate.yml`) | GitHub OIDC job token, re-minted for every call because it lives only minutes; `SENTINEL_API_KEY` secret as a fallback | One PR comment, edited in place (`gh pr comment --edit-last`) |
+| GitLab CI (`ci-templates/gitlab/sentinel.gitlab-ci.yml`) | `id_tokens` with `aud: sentinel`; `SENTINEL_API_KEY` as a fallback | One MR note, found by a marker and updated, if `SENTINEL_GITLAB_TOKEN` is set |
+| Jenkins (`ci-templates/jenkins/Jenkinsfile`) | Per-repo API key from the `sentinel-api-key` credential (Jenkins has no OIDC identity Sentinel can verify) | Console summary; a GitHub PR comment if `sentinel-github-token` exists |
+
+- The GitHub job is skipped when the `SENTINEL_GATEWAY_URL` variable is unset, so the template
+  cannot fail on repos that have not opted in. It is also skipped for fork PRs.
+- Self-hosted Sentinel registers a public GitHub/GitLab repo with its immutable host id, fetched
+  anonymously, so OIDC works without hosted mode.
+- The README warns about self-hosted runners on public repos.
+
+**Live proof (GitHub, 2026-11-20)** on `anandharshit712/ORION` PR #12, through an ngrok tunnel to a
+host-native Gateway:
+
+- The OIDC job token was accepted (`202`), the run completed, and the PR comment was posted. The
+  check failed on the gate's decision (`escalate`), which is the intended behaviour.
+- The run itself exposed two scoring problems, logged rather than fixed here because each changes
+  the gate:
+  - Compliance-dimension highs are weighted as `security.high`.
+  - Uninstalled test dependencies are scored as test failures.
 
 ## 7. Phase 6 — Test generation in CI
 

@@ -1,0 +1,22 @@
+# Build context for deploy/app.Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+.git
+.env
+.env.*
+!.env.example
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.cache
+.claude
+.impeccable
+.vscode
+neuro-san-studio
+graphify-out
+logs
+nss_local.db
+frontend/node_modules
+frontend/dist
+**/node_modules
+PENDING.md
+PLATFORM-PLAN.md

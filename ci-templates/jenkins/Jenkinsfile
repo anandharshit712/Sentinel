@@ -1,0 +1,99 @@
+// Sentinel promotion gate for Jenkins — fails the build unless Sentinel decides "promote".
+//
+// Use as the Jenkinsfile of a (multibranch) pipeline, or paste the `Sentinel gate` stage into yours.
+// Setup (README "CI integration"):
+//   1. Register the repo in Sentinel (Settings → Repositories) and create a CI key there.
+//   2. Jenkins credential, kind "Secret text", id `sentinel-api-key` = that key. It stays in
+//      Jenkins' credential store and is masked in the log; never put it in the repo.
+//   3. Set SENTINEL_GATEWAY_URL below (or as a global environment variable).
+//   4. Optional PR comment on GitHub: credential "Secret text" id `sentinel-github-token`, a token
+//      allowed to comment on the repo's pull requests. Without it the result is in the console only.
+// Needs `curl` and `jq` on the agent.
+//
+// Jenkins has no OIDC job identity Sentinel can verify, so this is the API-key path: the key is
+// bound to one registered repo, and Sentinel refuses an event whose clone URL is any other repo.
+
+pipeline {
+  agent any
+  options { timeout(time: 30, unit: 'MINUTES') }
+  environment {
+    SENTINEL_GATEWAY_URL = "${env.SENTINEL_GATEWAY_URL ?: 'http://localhost:8000'}"
+    FROM_ENV = 'dev'
+    TO_ENV = 'test'
+  }
+  stages {
+    stage('Sentinel gate') {
+      steps {
+        withCredentials([string(credentialsId: 'sentinel-api-key', variable: 'SENTINEL_API_KEY')]) {
+          sh '''#!/bin/bash
+            set -euo pipefail
+            GW="${SENTINEL_GATEWAY_URL%/}"
+            HEAD_SHA=$(git rev-parse HEAD)
+            # PR build (multibranch): diff against the target branch; branch build: the previous commit.
+            if [ -n "${CHANGE_TARGET:-}" ]; then
+              git fetch --no-tags origin "+refs/heads/${CHANGE_TARGET}:refs/remotes/origin/${CHANGE_TARGET}" >/dev/null 2>&1 || true
+              BASE_SHA=$(git merge-base "origin/${CHANGE_TARGET}" HEAD)
+            else
+              BASE_SHA=${GIT_PREVIOUS_SUCCESSFUL_COMMIT:-$(git rev-parse HEAD~1)}
+            fi
+            REPO_URL=${GIT_URL:-$(git config --get remote.origin.url)}
+            event=$(jq -nc \
+              --arg eid "jenkins-${JOB_NAME}-${BUILD_NUMBER}" --arg url "$REPO_URL" \
+              --arg name "$(basename -s .git "$REPO_URL")" \
+              --arg base "$BASE_SHA" --arg head "$HEAD_SHA" \
+              --arg branch "${CHANGE_BRANCH:-${BRANCH_NAME:-${GIT_BRANCH:-unknown}}}" \
+              --arg title "${CHANGE_TITLE:-${JOB_NAME} #${BUILD_NUMBER}}" \
+              --arg author "${CHANGE_AUTHOR:-jenkins}" --arg from "$FROM_ENV" --arg to "$TO_ENV" \
+              '{event_id:$eid, source:"jenkins",
+                repo:{url:$url, name:$name, default_branch:"main"},
+                change:{base_sha:$base, head_sha:$head, branch:$branch, title:$title, author:$author},
+                target_transition:{from_env:$from, to_env:$to}, requested_by:$author}')
+            resp=$(curl -sS -X POST "$GW/api/v1/ci/runs" -H "X-Sentinel-Key: $SENTINEL_API_KEY" \
+                   -H "Content-Type: application/json" -d "{\\"event\\": $event}")
+            run_id=$(echo "$resp" | jq -r '.run_id // empty')
+            [ -n "$run_id" ] || { echo "Sentinel refused the run: $resp"; exit 1; }
+            echo "Sentinel run: $GW/runs/$run_id"
+            deadline=$(( $(date +%s) + 1500 )); state=""
+            while [ "$(date +%s)" -lt "$deadline" ]; do
+              detail=$(curl -sf "$GW/api/v1/ci/runs/$run_id" -H "X-Sentinel-Key: $SENTINEL_API_KEY" || echo '{}')
+              state=$(echo "$detail" | jq -r '.state // "unknown"'); echo "  state=$state"
+              if [ "$state" = "done" ] || [ "$state" = "failed" ]; then break; fi
+              sleep 15
+            done
+            echo "$detail" > sentinel-result.json
+            decision=$(jq -r '.decision.decision // "none"' sentinel-result.json)
+            echo "===== Sentinel gate: $decision ====="
+            jq -r '"critical: \\(.review.counts.critical // 0)  high: \\(.review.counts.high // 0)  health: \\(.review.pr_health_score // "n/a")"' sentinel-result.json
+            jq -r '.review.executive_summary // ""' sentinel-result.json
+            echo "Full report: $GW/runs/$run_id"
+            [ "$state" = "done" ] || { echo "Sentinel run did not finish (state=$state)"; exit 1; }
+            [ "$decision" = "promote" ] || { echo "Sentinel decided '$decision'"; exit 1; }
+          '''
+        }
+      }
+      post {
+        always {
+          script {
+            // optional GitHub PR comment; skipped silently when the credential does not exist
+            if (env.CHANGE_ID && fileExists('sentinel-result.json')) {
+              try {
+                withCredentials([string(credentialsId: 'sentinel-github-token', variable: 'GH_TOKEN')]) {
+                  sh '''#!/bin/bash
+                    set -eu
+                    slug=$(echo "${GIT_URL}" | sed -E 's#.*github.com[:/]##; s#\\.git$##')
+                    body=$(jq -r '"### Sentinel gate: `\\(.decision.decision // "none")`\\n\\n\\(.review.counts.critical // 0) critical / \\(.review.counts.high // 0) high. Full report: \\(.url)"' sentinel-result.json)
+                    curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/${slug}/issues/${CHANGE_ID}/comments" \
+                      -d "$(jq -nc --arg b "$body" '{body:$b}')" >/dev/null
+                  '''
+                }
+              } catch (err) {
+                echo "No PR comment posted: ${err}"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

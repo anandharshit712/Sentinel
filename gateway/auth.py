@@ -154,8 +154,9 @@ def remove_federated_identity(user_sub: str, provider: str) -> None:
 
 def _host_get(provider: str, path: str, token: str) -> tuple[int, dict]:
     base = "https://api.github.com" if provider == "github" else f"{GITLAB_URL}/api/v4"
-    hdr = {"Authorization": f"Bearer {token}", "Accept": "application/json",
-           "User-Agent": "sentinel-gateway"}
+    hdr = {"Accept": "application/json", "User-Agent": "sentinel-gateway"}
+    if token:   # empty = anonymous lookup of a public repo (token mode registration)
+        hdr["Authorization"] = f"Bearer {token}"
     status, body = _http(base + path, headers=hdr)
     try:
         return status, json.loads(body or b"{}")

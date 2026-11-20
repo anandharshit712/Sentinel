@@ -149,16 +149,38 @@ $env:PYTHONPATH="."; .venv\Scripts\python.exe scripts\run_repo.py --full https:/
 
 `--full` is **audit mode**: it diffs against the git empty-tree so every file reads as added, then the security review adaptively fans out across 1–4 parallel reviewers sized to the repo (`review_planner`). The output is the review findings + honest coverage (how much was deep-reviewed vs deterministically scanned). **The promote/escalate decision is advisory in audit mode** — the risk formula is change-churn-driven, so a whole-repo "change" pegs risk high by construction; read the findings, not the verdict. The helper prints an `AUDIT MODE` banner to make this explicit.
 
-### GitHub Action gate
+### CI integration
 
-Gate any repo's PRs on Sentinel's decision with [`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml) — copy it into the target repo's `.github/workflows/`. On each PR it builds a `github`-source DeliveryEvent and `POST`s it to `/api/v1/simulate`; the Gateway clones the repo server-side, runs the pipeline, and returns a decision. The check **fails unless the decision is `promote`** (escalate/hold block the merge until reviewed in the dashboard).
+Each template gates a pull/merge request on Sentinel's decision. The job fails unless the decision is
+`promote`; escalate and hold block the merge until someone reviews the run in the dashboard. Every
+template posts to `POST /api/v1/ci/runs`, then polls `GET /api/v1/ci/runs/{id}`. Both endpoints
+accept only a credential that belongs to **one registered repo**, and Sentinel refuses an event
+whose clone URL is a different repo.
 
-No new backend — it reuses the same `simulate` endpoint the demo uses. Two repo secrets:
+First, register the repo: **Settings → Repositories → Register**. Hosted Sentinel checks with GitHub
+or GitLab that your linked account administers the repo. Self-hosted, the operator's admin token is
+trusted, and Sentinel still records the host's immutable repo id so OIDC job tokens can be matched
+to it.
 
-- `SENTINEL_GATEWAY_URL` — a reachable Gateway base URL. For local dev, tunnel it: `cloudflared tunnel --url http://localhost:8000`.
-- `SENTINEL_TOKEN` — an admin token from the Gateway's `API_TOKENS` (`simulate` is admin-only).
+| Platform | Template | How the job proves which repo it is | What you configure |
+|---|---|---|---|
+| GitHub Actions | [`.github/workflows/sentinel-gate.yml`](.github/workflows/sentinel-gate.yml) | GitHub OIDC job token (`id-token: write`). There is no stored secret. | Repository **variable** `SENTINEL_GATEWAY_URL`. Optional secret `SENTINEL_API_KEY` as a fallback. |
+| GitLab CI | [`ci-templates/gitlab/sentinel.gitlab-ci.yml`](ci-templates/gitlab/sentinel.gitlab-ci.yml) | GitLab `id_tokens` with audience `sentinel` | CI/CD variable `SENTINEL_GATEWAY_URL`. Optional masked `SENTINEL_GITLAB_TOKEN` (project token, `api`) to post an MR note. |
+| Jenkins | [`ci-templates/jenkins/Jenkinsfile`](ci-templates/jenkins/Jenkinsfile) | Per-repo API key (Settings → New CI key). It is shown once and stored hashed. | Jenkins credential `sentinel-api-key` (Secret text). Optional `sentinel-github-token` to post a PR comment. |
 
-Tune `FROM_ENV`/`TO_ENV` in the workflow `env:` block for the promotion this gate represents (default `dev → test`). Limitations: same-repo PRs only (the Gateway clones `repo.url`, so a fork's head SHA isn't reachable — fork PRs are skipped).
+CI secrets stay in the CI platform's own secret store, never in the repo. GitHub posts one PR comment
+and edits it in place on each push. GitLab does the same with its MR note when a token is configured.
+The full result is always in the job log.
+
+**Self-hosted runners:** never run these templates on a runner you own for a public repo unless
+outside contributors need approval first. Otherwise a pull request could run code on your machine.
+Fork PRs are skipped on GitHub, because a fork's head commit is not reachable from the base repo and
+forks must not receive the job's tokens.
+
+For local trials, expose the Gateway with a tunnel (`ngrok http 8000` or
+`cloudflared tunnel --url http://localhost:8000`) and use that URL as `SENTINEL_GATEWAY_URL`.
+To change which promotion a gate represents, edit `FROM_ENV`/`TO_ENV` in the template (default:
+`dev → test`).
 
 ## Status
 
