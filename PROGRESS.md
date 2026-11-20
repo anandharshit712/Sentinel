@@ -1,7 +1,7 @@
 # Sentinel — build tracker
 
 **The answer to "where are we?" without having to ask.** Updated whenever a phase closes (see
-`CLAUDE.md` rule 0d). Last updated **2026-11-15** · 186 tests · 74 commits.
+`CLAUDE.md` rule 0d). Last updated **2026-11-20** · 201 tests.
 
 Status vocabulary, used strictly:
 
@@ -26,6 +26,7 @@ A row is never ✅ because the code exists. It is ✅ when something proves it w
 | P4 — learning loop | ✅ complete | 100% |
 | Oracle evidence (doc 11) | ✅ complete | 100% |
 | P5 — polish & showcase | ✅ complete | 100% |
+| Platform track ([12](docs/solution/12-platform-plan.md)) | 🟡 in progress: Phase 1 done, Phases 2–8 open | 13% |
 | P7 — production track | ⬜ deliberately deferred | 0% |
 
 **Inventory:** 27 coded tools · 13 agents across 2 networks · 17 lib modules · 10 verification
@@ -133,6 +134,20 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | Trial against real open-source repos | ✅ | [docs/writeup/real-repo-trials.md](docs/writeup/real-repo-trials.md): the review pipeline on 4 repos and the evaluator on 9 `humanize` functions (median 0.90). Found a real missing boundary test in `humanize.clamp`, confirmed by execution |
 | Extract the evaluation layer as a standalone tool | ✅ | `python -m lib.evaluate`: no Neuro-SAN, no DB, no model. `test_evaluator` is now a thin wrapper. Handles `src/` layouts. Exit 0 only for an accepted, undisputed test. Self-check: `python -m lib.evaluate --self-check`. Not packaged for pip: nothing has asked for it yet |
 
+## 7b. Platform track ([12](docs/solution/12-platform-plan.md))
+
+| # | Item | State | Notes |
+|---|---|---|---|
+| 0 | Model health | ✅ | 2026-11-14: chain `nemotron-3-ultra` → `mistral-large-4-1t-a52b` → `gpt-oss-20b`, probe 3/3, `verify_b4` PASS |
+| 1 | Measure review quality | ✅ | 2026-11-20. Findings stored as rows (migration 0005), human verdicts, `missed_bug` outcome, precision by source × dimension / repo / version, `runs.sentinel_version`. `verify_p1m` 11/11 (real DB, no LLM); browser check 7/7 (a verdict and its note persist across a reload, "previously marked" shown, Calibration shows precision + missed bugs). No real precision numbers yet: that needs real runs judged by a person |
+| 2 | Per-run sandbox | ⬜ | |
+| 3 | Packaging (Docker) | ⬜ | |
+| 4 | Accounts, tenancy, BYOK | ⬜ | |
+| 5 | CI platforms | ⬜ | |
+| 6 | Test generation in CI | ⬜ | |
+| 7 | Licence resolution, `spec_check` invariants, proposals 9–14 | ⬜ | |
+| 8 | Open-source readiness | ⬜ | |
+
 ## 8. Open items, and why each is still open
 
 | Item | Why it is not done | What unblocks it |
@@ -158,12 +173,13 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 ```bash
 PYTHONPATH=. python scripts/verify_o.py        # oracle evidence     17/17, no provider needed
 PYTHONPATH=. python scripts/verify_p4.py       # learning loop       12/12, no provider needed
+PYTHONPATH=. python scripts/verify_p1m.py      # review precision    11/11, no provider needed
 PYTHONPATH=. python scripts/probe_models.py    # is NIM healthy right now?
 PYTHONPATH=. python scripts/verify_p2.py 3     # review cluster      needs the network up
 PYTHONPATH=. python scripts/verify_p3.py 3     # test generation     needs the network up
 PYTHONPATH=. python scripts/verify_b4.py       # the two demo runs   needs the network up
 PYTHONPATH=. python -m lib.evaluate --self-check  # standalone evaluator, no provider needed
-python -m pytest -q                            # 186 unit tests
+python -m pytest -q                            # 201 unit tests
 ```
 
 The first two and the probe run on any day. The rest need NIM to be answering.

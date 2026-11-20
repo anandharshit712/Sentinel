@@ -17,8 +17,10 @@ no-ops the PR/MR comment.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
+import re
 from typing import Any, Dict, List, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
@@ -53,6 +55,46 @@ def _dedup(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 # legacy key + the adaptive fan-out's per-shard reviewer contracts
 _SEC_KEYS = ["security_findings"] + [f"security_findings_shard_{i}" for i in range(1, 5)]
+_OTHER_DIMS = {"quality_findings": "quality", "performance_findings": "performance",
+               "compliance_findings": "compliance"}
+
+
+def _tag(findings: List[Dict[str, Any]], dimension: str) -> List[Dict[str, Any]]:
+    """Copy each finding with the review dimension it came from — after the merge nothing else
+    records it, and precision is reported per dimension."""
+    return [{**f, "dimension": f.get("dimension") or dimension} for f in findings]
+
+
+def fingerprint(repo: str, f: Dict[str, Any]) -> str:
+    """Stable identity of a finding across reruns of one repo, for "previously marked …".
+
+    Built from repo + file + category + the title with digits blanked, NOT the line number or the
+    tool's id (both embed line numbers, which move whenever code above the finding changes).
+    Ceiling: two same-titled findings in one file share a fingerprint; acceptable, since it only
+    drives a display hint, never suppression.
+    """
+    title = re.sub(r"\s+", " ", re.sub(r"\d+", "#", (f.get("title") or "").lower())).strip()
+    key = "|".join([repo or "", f.get("file") or "", f.get("category") or "", title])
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _unique_ids(findings: List[Dict[str, Any]]) -> None:
+    """Each shard reviewer numbers its own findings from SEC-001, so ids collide after the merge.
+    A finding row is keyed (run_id, finding_id): suffix repeats so no two collapse into one row."""
+    seen: Dict[str, int] = {}
+    for f in findings:
+        base = str(f.get("id") or "F")
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            f["id"] = f"{base}#{seen[base]}"
+
+
+def _finding_rows(repo: str, findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [{"finding_id": f["id"], "kind": f.get("dimension") or "security",
+             "severity": f["severity"], "category": f.get("category"), "file": f.get("file"),
+             "line_start": f.get("line_start"), "line_end": f.get("line_end"), "cwe": f.get("cwe"),
+             "payload": f, "fingerprint": f.get("fingerprint") or fingerprint(repo, f),
+             "source": f.get("source")} for f in findings]
 
 
 def _coverage(sly_data: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
@@ -138,28 +180,33 @@ def _floor_findings(sly_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     scan_input = {"run_id": sly_data.get("run_id"), "change_profile": profile,
                   "event": sly_data.get("event"), "repo_workspace": sly_data.get("repo_workspace")}
     out: List[Dict[str, Any]] = []
-    for tool in (SecretScannerTool(), DependencyCveTool(), PerformanceScannerTool(),
-                 LicenseScannerTool()):
+    for tool, dim in ((SecretScannerTool(), "security"), (DependencyCveTool(), "security"),
+                      (PerformanceScannerTool(), "performance"), (LicenseScannerTool(), "compliance")):
         try:
             res = tool.invoke({}, dict(scan_input))
             if isinstance(res, dict):
-                out.extend(res.get("findings", []))
+                out.extend(_tag(res.get("findings", []), dim))
         except Exception:   # a floor that cannot run must not blank the ones that can
             continue
     try:
-        out.extend(_spec_mismatch_findings(sly_data))
+        out.extend(_tag(_spec_mismatch_findings(sly_data), "spec"))
     except Exception:
         pass
     return out
 
 
 def _synthesize(sly_data: Dict[str, Any]) -> Dict[str, Any]:
-    sec = [f for k in _SEC_KEYS for f in ((sly_data.get(k) or {}).get("findings") or [])]
+    sec = _tag([f for k in _SEC_KEYS for f in ((sly_data.get(k) or {}).get("findings") or [])],
+               "security")
     # Phase 2 review cluster (08): quality, performance and compliance reviewers each write their
     # own findings contract; all four dimensions merge into the one report.
-    other = [f for k in ("quality_findings", "performance_findings", "compliance_findings")
-             for f in ((sly_data.get(k) or {}).get("findings") or [])]
+    other = [f for k, dim in _OTHER_DIMS.items()
+             for f in _tag((sly_data.get(k) or {}).get("findings") or [], dim)]
     merged = _dedup(sec + _floor_findings(sly_data) + other)
+    _unique_ids(merged)
+    repo = ((sly_data.get("event") or {}).get("repo") or {}).get("name", "")
+    for f in merged:
+        f["fingerprint"] = fingerprint(repo, f)
     counts = {s: sum(1 for f in merged if f["severity"] == s) for s in _SEV_DEDUCT}
     score = max(0, 100 - sum(_SEV_DEDUCT[f["severity"]] for f in merged))
     if counts["critical"]:
@@ -213,6 +260,14 @@ class ReportPublisherTool(CodedTool):
             except Exception as pe:
                 persist_error = str(pe)
                 logger.error("run %s: review_report NOT persisted: %s", run_id, pe)
+            # One row per finding, so a human can judge each one (Phase 1). Separate from the
+            # report write: a findings-table problem must not cost the run its report.
+            try:
+                repo = ((sly_data.get("event") or {}).get("repo") or {}).get("name", "")
+                dao.save_findings(str(run_id), _finding_rows(repo, report.get("findings") or []))
+            except Exception as fe:
+                persist_error = f"{persist_error}; findings: {fe}" if persist_error else f"findings: {fe}"
+                logger.error("run %s: finding rows NOT persisted: %s", run_id, fe)
             simulate = os.environ.get("SIMULATE_CICD", "true").lower() == "true"
             publish = {"action": "none", "detail": "simulated"} if simulate \
                 else {"action": "pr_comment", "detail": "requested via gateway"}

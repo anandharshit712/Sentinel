@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import type { RunDetail as RD, Finding, RunState, CoverageGaps, TestProposal } from './types'
+import type { RunDetail as RD, Finding, FindingRow, RunState, CoverageGaps, TestProposal, Verdict } from './types'
 import {
   BandChip, DecisionChip, SeverityChip, StateChip, ScoreDial, HealthGauge, Card,
   RoleGate, useRun, useApprovals, resolveApproval, rerun, stopRun, STAGES, stageRank,
-  generateTests, resolveProposal,
+  generateTests, resolveProposal, setFindingVerdict, recordMissedBug,
 } from './lib'
 import { useRunEvents } from './sse'
 import { AgentGraph } from './AgentGraph'
@@ -24,7 +24,7 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
   if (error) return <div className="p-6 text-red-400">Error: {error}</div>
   if (!data) return null
   const { run, review_report, test_plan, test_results, risk_score, review_plan, decision,
-          coverage_gaps, test_proposals, error: failReason } = data
+          coverage_gaps, test_proposals, findings: findingRows, error: failReason } = data
   const state = (liveState || run.state) as RunState
   const prodGate = run.to_env === 'production'
   const dec = decision?.decision ?? run.decision
@@ -55,7 +55,8 @@ export function RunDetailPane({ id, full }: { id: string; full?: boolean }) {
       {state === 'failed' && <FailureCard error={failReason} events={events} />}
       {decision && <DecisionCard d={decision} prodGate={prodGate} runId={id} onResolved={refetch} />}
       {risk_score && <RiskScoreCard r={risk_score} />}
-      {review_report && <ReviewReportCard r={review_report} />}
+      {review_report && <ReviewReportCard r={review_report} rows={findingRows || []} runId={id}
+                                          onChanged={refetch} />}
       {test_results && <TestResultsCard r={test_results} />}
       {test_plan && <TestPlanCard r={test_plan} />}
       {(coverage_gaps || (test_proposals && test_proposals.length > 0)) &&
@@ -366,12 +367,25 @@ function RiskScoreCard({ r }: { r: NonNullable<RD['risk_score']> }) {
   )
 }
 
-function ReviewReportCard({ r }: { r: NonNullable<RD['review_report']> }) {
+const VERDICT_LABEL: Record<Verdict, string> = { real: 'real', false_positive: 'false positive', wont_fix: "won't fix" }
+const VERDICT_CLS: Record<Verdict, string> = {
+  real: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  false_positive: 'border-red-500/40 bg-red-500/10 text-red-300',
+  wont_fix: 'border-slate-500/40 bg-slate-500/10 text-slate-300',
+}
+
+function ReviewReportCard({ r, rows, runId, onChanged }:
+  { r: NonNullable<RD['review_report']>; rows: FindingRow[]; runId: string; onChanged: () => void }) {
   const findings = r.findings || []
+  const byId = new Map(rows.map(x => [x.finding_id, x]))
+  const judged = rows.filter(x => x.verdict).length
   return (
     <Card title="Review Report" right={<HealthGauge value={r.pr_health_score} />}>
       {r.executive_summary && <p className="mb-3 text-sm text-(--ink)">{r.executive_summary}</p>}
       {findings.length === 0 && <p className="text-sm text-(--ink-dim)">No findings.</p>}
+      {rows.length > 0 && (
+        <p className="mb-2 text-[10px] uppercase tracking-widest text-(--ink-dim)">{judged} of {rows.length} judged</p>
+      )}
       <ul className="space-y-2">
         {findings.map((f: Finding) => (
           <li key={f.id} className="rounded-sm border border-(--line) bg-(--panel) p-2">
@@ -379,14 +393,92 @@ function ReviewReportCard({ r }: { r: NonNullable<RD['review_report']> }) {
               <SeverityChip s={f.severity} />
               <span className="text-sm text-(--ink-hi)">{f.title}</span>
               {f.source === 'llm' && <span className="rounded-sm border border-violet-500/30 bg-violet-500/10 px-1.5 text-[10px] uppercase text-violet-300">AI</span>}
+              {f.dimension && <span className="text-[10px] uppercase tracking-wider text-(--ink-dim)">{f.dimension}</span>}
               {f.file && <code className="ml-auto text-[10px] text-(--ink-dim)">{f.file}{f.line_start ? `:${f.line_start}` : ''}</code>}
             </div>
             {f.explanation && <p className="mt-1 text-[11px] text-(--ink-dim)">{f.explanation}</p>}
             {f.fix_suggestion && <p className="mt-1 text-[11px] text-emerald-400/80">fix: {f.fix_suggestion}</p>}
+            {byId.get(f.id) && <FindingVerdict row={byId.get(f.id)!} onChanged={onChanged} />}
           </li>
         ))}
       </ul>
+      <RoleGate need="approver"><MissedBugForm runId={runId} /></RoleGate>
     </Card>
+  )
+}
+
+function FindingVerdict({ row, onChanged }: { row: FindingRow; onChanged: () => void }) {
+  const [note, setNote] = useState(row.note || '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const mark = (v: Verdict) => {
+    setBusy(true); setErr('')
+    setFindingVerdict(row.id, v, note).then(onChanged).catch(e => setErr(String(e))).finally(() => setBusy(false))
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-(--line-soft) pt-2 text-[11px]">
+      {row.verdict
+        ? <span data-verdict={row.verdict} className={`rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${VERDICT_CLS[row.verdict]}`}>
+            {VERDICT_LABEL[row.verdict]}{row.note ? ` · ${row.note}` : ''}</span>
+        : <span className="text-(--ink-dim)">not judged</span>}
+      {/* display only: a past verdict never hides or downgrades this finding */}
+      {row.previous && !row.verdict && (
+        <span className="text-(--ink-dim)">· previously marked {VERDICT_LABEL[row.previous.verdict]} on this repo</span>
+      )}
+      <RoleGate need="approver">
+        <span className="ml-auto flex flex-wrap items-center gap-1.5">
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="note (optional)"
+            aria-label="verdict note"
+            className="w-36 rounded-sm border border-(--line) bg-(--bg-2) px-1.5 py-0.5 text-[11px] focus:border-(--signal)" />
+          {(Object.keys(VERDICT_LABEL) as Verdict[]).map(v => (
+            <button key={v} disabled={busy} onClick={() => mark(v)}
+              className={`rounded-sm border px-2 py-0.5 text-[10px] uppercase tracking-wide disabled:opacity-50 ${
+                row.verdict === v ? VERDICT_CLS[v] : 'border-(--line) text-(--ink-dim) hover:border-(--signal) hover:text-(--signal)'}`}>
+              {VERDICT_LABEL[v]}
+            </button>
+          ))}
+        </span>
+      </RoleGate>
+      {err && <span className="w-full text-red-300">{err}</span>}
+    </div>
+  )
+}
+
+function MissedBugForm({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false)
+  const [f, setF] = useState({ file: '', line: '', category: '', description: '' })
+  const [msg, setMsg] = useState('')
+  const submit = () => {
+    if (!f.description.trim()) return
+    recordMissedBug(runId, { file: f.file || undefined, line: f.line ? Number(f.line) : undefined,
+                             category: f.category || undefined, description: f.description })
+      .then(() => { setMsg('Recorded. It counts against review recall on the Calibration screen.'); setOpen(false)
+                    setF({ file: '', line: '', category: '', description: '' }) })
+      .catch(e => setMsg(String(e)))
+  }
+  const input = 'rounded-sm border border-(--line) bg-(--bg-2) px-1.5 py-0.5 text-[11px] focus:border-(--signal)'
+  return (
+    <div className="mt-3 border-t border-(--line-soft) pt-2 text-[11px]">
+      {!open && <button onClick={() => { setOpen(true); setMsg('') }}
+        className="text-[10px] uppercase tracking-widest text-(--ink-dim) hover:text-(--signal)">report a bug this review missed</button>}
+      {open && (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            <input className={`${input} w-56`} placeholder="file" value={f.file} onChange={e => setF({ ...f, file: e.target.value })} />
+            <input className={`${input} w-16`} placeholder="line" value={f.line} onChange={e => setF({ ...f, line: e.target.value.replace(/\D/g, '') })} />
+            <input className={`${input} w-40`} placeholder="category (e.g. sqli)" value={f.category} onChange={e => setF({ ...f, category: e.target.value })} />
+          </div>
+          <textarea className={`${input} w-full`} rows={2} placeholder="what was missed (required)"
+            value={f.description} onChange={e => setF({ ...f, description: e.target.value })} />
+          <div className="flex gap-2">
+            <button disabled={!f.description.trim()} onClick={submit}
+              className="rounded-sm border border-(--signal)/40 bg-(--signal-dim) px-3 py-0.5 text-[10px] uppercase tracking-wide text-(--signal) disabled:opacity-40">record</button>
+            <button onClick={() => setOpen(false)} className="text-[10px] uppercase tracking-wide text-(--ink-dim)">cancel</button>
+          </div>
+        </div>
+      )}
+      {msg && <p className="mt-1 text-(--ink-dim)">{msg}</p>}
+    </div>
   )
 }
 

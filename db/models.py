@@ -27,6 +27,7 @@ runs = Table(
     Column("state", Text, nullable=False, server_default="received"),
     Column("created_at", _TS, nullable=False, server_default=func.now()),
     Column("finished_at", _TS),
+    Column("sentinel_version", Text),   # git SHA of the code that judged this run (0005)
 )
 
 review_reports = Table(
@@ -43,7 +44,7 @@ findings = Table(
     Column("id", BigInteger, primary_key=True),
     Column("run_id", _UUID),
     Column("finding_id", Text, nullable=False),
-    Column("kind", Text, nullable=False),
+    Column("kind", Text, nullable=False),            # review dimension: security|quality|performance|compliance|spec
     Column("severity", Text, nullable=False),
     Column("category", Text),
     Column("file", Text),
@@ -51,6 +52,13 @@ findings = Table(
     Column("line_end", Integer),
     Column("cwe", Text),
     Column("payload", JSONB, nullable=False),
+    # 0005: a human's judgement of the finding — the only ground truth for review precision.
+    Column("fingerprint", Text),                     # stable across reruns of the same repo
+    Column("source", Text),                          # tool | llm
+    Column("verdict", Text),                         # null | real | false_positive | wont_fix
+    Column("verdict_by", Text),
+    Column("verdict_at", _TS),
+    Column("note", Text),
 )
 
 review_plans = Table(

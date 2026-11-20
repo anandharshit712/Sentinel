@@ -29,12 +29,29 @@ def get_engine() -> Engine:
     return create_engine(url, pool_pre_ping=True, future=True)
 
 
+@lru_cache(maxsize=1)
+def sentinel_version() -> str:
+    """Which build of Sentinel judged a run. Precision measured across a code change is two
+    numbers, not one, so every run carries it. Images bake SENTINEL_VERSION; host-native dev
+    falls back to the checkout's short SHA."""
+    v = os.environ.get("SENTINEL_VERSION", "").strip()
+    if v:
+        return v
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def insert_run(run_id: str, event: dict, source: str, repo: str,
                from_env: str, to_env: str, state: str = "received") -> None:
     with get_engine().begin() as c:
         c.execute(models.runs.insert().values(
             run_id=run_id, event=event, source=source, repo=repo,
-            from_env=from_env, to_env=to_env, state=state))
+            from_env=from_env, to_env=to_env, state=state, sentinel_version=sentinel_version()))
 
 
 def ensure_run(run_id: str, event: dict, source: str = "manual") -> None:
@@ -49,6 +66,7 @@ def ensure_run(run_id: str, event: dict, source: str = "manual") -> None:
         run_id=run_id, event=event, source=source,
         repo=(event.get("repo") or {}).get("name", "unknown"),
         from_env=t.get("from_env", "dev"), to_env=t.get("to_env", "test"),
+        sentinel_version=sentinel_version(),
     ).on_conflict_do_nothing(index_elements=["run_id"])
     with get_engine().begin() as c:
         c.execute(stmt)
@@ -240,6 +258,70 @@ def set_proposal_status(proposal_id: int, status: str) -> bool:
                       .where(models.test_proposals.c.id == proposal_id)
                       .values(status=status))
     return r.rowcount > 0
+
+
+def save_findings(run_id: str, rows: list[dict]) -> None:
+    """Upsert one row per merged finding (Phase 1). Re-publishing a run's report refreshes the
+    finding's content but never touches a verdict a human has already given."""
+    if not rows:
+        return
+    f = models.findings
+    stmt = pg_insert(f).values([{"run_id": run_id, **r} for r in rows])
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["run_id", "finding_id"],
+        set_={k: stmt.excluded[k] for k in ("kind", "severity", "category", "file", "line_start",
+                                             "line_end", "cwe", "payload", "fingerprint", "source")})
+    with get_engine().begin() as c:
+        c.execute(stmt)
+
+
+def list_findings(run_id: str) -> list[dict]:
+    """A run's finding rows, each with the most recent verdict the same fingerprint received on
+    an EARLIER run of the same repo (`previous`). Display only — a past verdict never suppresses a
+    finding, or the gate would stop being a function of the code in front of it."""
+    f, r = models.findings, models.runs
+    with get_engine().connect() as c:
+        rows = [dict(m) for m in c.execute(
+            select(f).where(f.c.run_id == run_id).order_by(f.c.id)).mappings()]
+        repo = c.execute(select(r.c.repo).where(r.c.run_id == run_id)).scalar()
+        fps = [x["fingerprint"] for x in rows if x["fingerprint"]]
+        prev: dict[str, dict] = {}
+        if fps and repo:
+            q = (select(f.c.fingerprint, f.c.verdict, f.c.verdict_at, f.c.run_id)
+                 .select_from(f.join(r, f.c.run_id == r.c.run_id))
+                 .where(r.c.repo == repo, f.c.run_id != run_id, f.c.verdict.is_not(None),
+                        f.c.fingerprint.in_(fps))
+                 .order_by(f.c.verdict_at.desc()))
+            for m in c.execute(q).mappings():
+                prev.setdefault(m["fingerprint"], dict(m))
+    for x in rows:
+        x["previous"] = prev.get(x["fingerprint"])
+    return rows
+
+
+def set_finding_verdict(finding_row_id: int, verdict: str, by: str, note: str | None) -> dict | None:
+    f = models.findings
+    with get_engine().begin() as c:
+        row = c.execute(f.update().where(f.c.id == finding_row_id).values(
+            verdict=verdict, verdict_by=by, note=note,
+            verdict_at=_dt.datetime.now(_dt.timezone.utc)).returning(
+            f.c.id, f.c.run_id, f.c.verdict, f.c.fingerprint)).mappings().first()
+        if row:
+            c.execute(models.audit_events.insert().values(
+                run_id=row["run_id"], actor=by, action=f"finding_{verdict}",
+                payload={"finding_row_id": finding_row_id, "note": note}))
+    return dict(row) if row else None
+
+
+def list_finding_rows_for_precision(limit: int = 50000) -> list[dict]:
+    """Every finding with the repo and Sentinel version of its run — precision is reported per
+    source x dimension x repo, split by version."""
+    f, r = models.findings, models.runs
+    q = (select(f.c.run_id, f.c.kind, f.c.source, f.c.severity, f.c.verdict, f.c.fingerprint,
+                r.c.repo, r.c.sentinel_version)
+         .select_from(f.join(r, f.c.run_id == r.c.run_id)).limit(limit))
+    with get_engine().connect() as c:
+        return [dict(m) for m in c.execute(q).mappings()]
 
 
 def record_outcome(run_id: str | None, outcome_type: str, payload: dict | None = None) -> int:

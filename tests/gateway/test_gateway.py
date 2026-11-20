@@ -53,6 +53,9 @@ class FakeDB:
     def list_audit(self, run_id=None, limit=200):
         return [a for a in self.audit if run_id is None or a["run_id"] == run_id]
 
+    def list_findings(self, run_id):
+        return []
+
 
 def _fake_invoke(run_id, event, ws, *, host, port, network, on_progress=None):
     for stage in ("change_analysis_agent", "security_review_agent", "code_quality_agent",
@@ -81,7 +84,7 @@ def client(monkeypatch):
     fake = FakeDB()
     for name in ("insert_run", "set_run_state", "get_run", "record_audit",
                  "find_run_by_event_id", "get_decision", "get_payload",
-                 "list_runs", "list_approvals", "list_audit"):
+                 "list_runs", "list_approvals", "list_audit", "list_findings"):
         monkeypatch.setattr(dao, name, getattr(fake, name))
     monkeypatch.setattr(gw, "invoke_network", _fake_invoke)
     # these tests exercise the pipeline/SSE/approval logic, not auth; run in open mode.

@@ -50,7 +50,8 @@ def outcomes_by_run(outcomes: Iterable[Dict[str, Any]]) -> Dict[str, str]:
             "reverted": 2, "incident": 2}
     for o in outcomes:
         rid, kind = o.get("run_id"), o.get("outcome_type")
-        if not rid or not kind:
+        # a missed bug judges the REVIEW, not the promotion: it must not make a run look settled
+        if not rid or not kind or kind == "missed_bug":
             continue
         if rid not in worst or rank.get(kind, 0) > rank.get(worst[rid], 0):
             worst[rid] = kind
@@ -203,6 +204,51 @@ def recommendations(promo: Dict[str, Any], esc: Dict[str, Any]) -> List[Dict[str
     return out
 
 
+# A verdict of won't-fix still says the finding was TRUE — the team just chose to live with it.
+_TRUE_VERDICTS = ("real", "wont_fix")
+
+
+def review_precision(findings: Iterable[Dict[str, Any]],
+                     outcomes: Iterable[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """How often was a reported finding real? (12 Phase 1)
+
+    precision = (real + won't fix) / judged. Unjudged findings are counted and never guessed at —
+    the same rule as an unsettled promotion. Grouped by source x dimension (is the LLM layer
+    worth its cost, per dimension?), by repo, and by Sentinel version, because a precision figure
+    that mixes two builds of the reviewer describes neither.
+
+    Recall cannot be computed from findings alone: a bug nobody reported leaves no row. The
+    `missed_bug` outcome is the only window onto it, so its count is reported beside precision.
+    """
+    def cell() -> Dict[str, int]:
+        return {"reported": 0, "judged": 0, "real": 0, "false_positive": 0, "wont_fix": 0}
+
+    groups: Dict[str, Dict[str, Dict[str, int]]] = {"by_source_dimension": {}, "by_repo": {},
+                                                     "by_version": {}}
+    for f in findings:
+        keys = {"by_source_dimension": f"{f.get('source') or 'unknown'}/{f.get('kind') or 'unknown'}",
+                "by_repo": f.get("repo") or "unknown",
+                "by_version": f.get("sentinel_version") or "unknown"}
+        v = f.get("verdict")
+        for g, k in keys.items():
+            c = groups[g].setdefault(k, cell())
+            c["reported"] += 1
+            if v:
+                c["judged"] += 1
+                c[v] = c.get(v, 0) + 1
+    out: Dict[str, Any] = {}
+    for g, cells in groups.items():
+        out[g] = {k: {**c, "precision": _rate(sum(c[t] for t in _TRUE_VERDICTS), c["judged"])}
+                  for k, c in sorted(cells.items())}
+    missed: Dict[str, int] = {}
+    for o in outcomes:
+        if o.get("outcome_type") == "missed_bug":
+            cat = (o.get("payload") or {}).get("category") or "unspecified"
+            missed[cat] = missed.get(cat, 0) + 1
+    out["missed_bugs"] = {"total": sum(missed.values()), "by_category": dict(sorted(missed.items()))}
+    return out
+
+
 def _repo_counts(decisions: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for d in decisions:
@@ -212,7 +258,8 @@ def _repo_counts(decisions: Iterable[Dict[str, Any]]) -> Dict[str, int]:
 
 
 def report(decisions: List[Dict[str, Any]], outcomes: List[Dict[str, Any]],
-           approvals: List[Dict[str, Any]], proposals: List[Dict[str, Any]]) -> Dict[str, Any]:
+           approvals: List[Dict[str, Any]], proposals: List[Dict[str, Any]],
+           findings: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
     """The whole picture. Safe on empty inputs — a fresh install has no history and must not
     look broken (10 §5)."""
     promo = promotion_calibration(decisions, outcomes)
@@ -234,6 +281,7 @@ def report(decisions: List[Dict[str, Any]], outcomes: List[Dict[str, Any]],
         "promotion_by_band": promo,
         "escalation_by_band": esc,
         "generated_tests": tests,
+        "review_precision": review_precision(findings or [], outcomes),
         "recommendations": recommendations(promo, esc),
         "min_sample": MIN_SAMPLE,
         "settling_days": SETTLING_DAYS,
@@ -293,6 +341,26 @@ def demo() -> None:
     assert empty["totals"]["decisions"] == 0
     assert empty["promotion_by_band"] == {} and empty["escalation_by_band"] == {}
     assert empty["applies_changes"] is False
+
+    # precision: won't-fix counts as true; unjudged rows are reported, never counted as either
+    rows = ([{"source": "tool", "kind": "security", "repo": "r", "sentinel_version": "a",
+              "verdict": "real"}] * 4
+            + [{"source": "tool", "kind": "security", "repo": "r", "sentinel_version": "a",
+                "verdict": "wont_fix"}]
+            + [{"source": "llm", "kind": "security", "repo": "r", "sentinel_version": "b",
+                "verdict": "false_positive"}] * 3
+            + [{"source": "llm", "kind": "security", "repo": "r", "sentinel_version": "b",
+                "verdict": None}] * 2)
+    pr = review_precision(rows, [{"run_id": "x", "outcome_type": "missed_bug",
+                                  "payload": {"category": "sqli"}}])
+    assert pr["by_source_dimension"]["tool/security"]["precision"] ==         {"n": 5, "rate": 1.0, "insufficient_data": False}, pr
+    llm = pr["by_source_dimension"]["llm/security"]
+    assert llm["reported"] == 5 and llm["judged"] == 3 and llm["precision"]["rate"] is None, llm
+    assert pr["by_repo"]["r"]["precision"]["rate"] == 0.625
+    assert set(pr["by_version"]) == {"a", "b"}
+    assert pr["missed_bugs"] == {"total": 1, "by_category": {"sqli": 1}}
+    # a missed bug never settles a promotion
+    assert outcomes_by_run([{"run_id": "x", "outcome_type": "missed_bug"}]) == {}
 
     print("lib/calibration.py OK")
 

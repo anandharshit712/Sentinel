@@ -19,9 +19,14 @@ export interface RunRow {
   approval_required?: boolean | null
 }
 
+export type Dimension = 'security' | 'quality' | 'performance' | 'compliance' | 'spec'
+export type Verdict = 'real' | 'false_positive' | 'wont_fix'
+
 export interface Finding {
   id: string
-  kind?: 'security' | 'quality'
+  kind?: Dimension
+  dimension?: Dimension
+  fingerprint?: string
   category?: string
   severity: Severity
   file?: string
@@ -97,7 +102,19 @@ export interface RunDetail {
   decision?: (DecisionContract & { reasoning_trail?: any }) | null
   coverage_gaps?: CoverageGaps | null
   test_proposals?: TestProposal[]
+  findings?: FindingRow[]        // one DB row per report finding, carrying the human verdict
   error?: string | null          // run_failed reason (present when state === 'failed')
+}
+
+export interface FindingRow {
+  id: number                     // row id — what the verdict endpoint takes
+  finding_id: string             // matches Finding.id in the report
+  kind: Dimension
+  source?: 'tool' | 'llm'
+  verdict?: Verdict | null
+  verdict_by?: string | null
+  note?: string | null
+  previous?: { verdict: Verdict; verdict_at?: string; run_id: string } | null
 }
 
 export interface CoverageGap {

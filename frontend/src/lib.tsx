@@ -110,6 +110,10 @@ export const generateTests = (id: string) =>
 export const resolveProposal = (id: number, action: 'adopt' | 'discard') =>
   api<{ proposal_id: number; status: string }>(`/api/v1/proposals/${id}`,
     { method: 'POST', body: JSON.stringify({ action }) })
+export const setFindingVerdict = (rowId: number, verdict: string, note?: string) =>
+  api(`/api/v1/findings/${rowId}/verdict`, { method: 'POST', body: JSON.stringify({ verdict, note }) })
+export const recordMissedBug = (runId: string, b: { file?: string; line?: number; category?: string; description: string }) =>
+  api(`/api/v1/runs/${runId}/outcome`, { method: 'POST', body: JSON.stringify({ outcome: 'missed_bug', ...b }) })
 export const rerun = (id: string) =>
   api<{ run_id: string }>(`/api/v1/runs/${id}/rerun`, { method: 'POST' })
 export const stopRun = (id: string) =>

@@ -31,6 +31,7 @@ export function Calibration() {
   const promo: Record<string, any> = data.promotion_by_band || {}
   const esc: Record<string, any> = data.escalation_by_band || {}
   const tests: Record<string, any> = data.generated_tests || {}
+  const prec: any = data.review_precision || {}
 
   // A fresh install has no history. Say what to do about it rather than rendering empty tables.
   if (!t.decisions) {
@@ -112,6 +113,37 @@ export function Calibration() {
           </div>
         </Card>
       )}
+
+      <Card title="Review Precision" right={<span className="text-[10px] uppercase tracking-widest text-(--ink-dim)">were the findings real?</span>}>
+        <p className="mb-2 text-[11px] text-(--ink-dim)">
+          precision = (real + won't fix) / judged. Unjudged findings are counted, never assumed.
+          Missed bugs recorded: <span className="tabular-nums text-(--ink-hi)">{prec.missed_bugs?.total ?? 0}</span>
+          {prec.missed_bugs?.total ? ` (${Object.entries(prec.missed_bugs.by_category || {}).map(([k, n]) => `${k} ${n}`).join(' · ')})` : ''}
+        </p>
+        {([['by_source_dimension', 'source / dimension'], ['by_repo', 'repo'], ['by_version', 'Sentinel version']] as const).map(([g, label]) => {
+          const cells: Record<string, any> = prec[g] || {}
+          if (!Object.keys(cells).length) return null
+          return (
+            <div key={g} className="mb-3">
+              <p className="mb-1 text-[10px] uppercase tracking-widest text-(--ink-dim)">{label}</p>
+              <div className="space-y-1 text-[11px]">
+                {Object.entries(cells).map(([k, c]: [string, any]) => (
+                  <div key={k} className="flex flex-wrap items-center gap-3">
+                    <span className="w-48 truncate text-(--signal)" title={k}>{k}</span>
+                    <Rate c={c.precision} />
+                    <span className="text-(--ink-dim)">
+                      {c.reported} reported · {c.judged} judged · {c.real} real · {c.false_positive} false positive · {c.wont_fix} won't fix
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+        {!Object.keys(prec.by_source_dimension || {}).length && (
+          <p className="text-sm text-(--ink-dim)">No findings stored yet.</p>
+        )}
+      </Card>
 
       <Card title="Recommendations" right={
         <span className="rounded-sm border border-(--line) px-2 py-0.5 text-[10px] uppercase tracking-wider text-(--ink-dim)">

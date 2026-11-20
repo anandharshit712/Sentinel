@@ -421,6 +421,8 @@ def get_run(run_id: str, _role: str = Depends(_require("viewer"))) -> dict:
         "risk_score": (dao.get_payload("risk_scores", run_id) or {}).get("payload"),
         "coverage_gaps": (dao.get_payload("coverage_gaps", run_id) or {}).get("payload"),
         "test_proposals": dao.list_test_proposals(run_id),
+        # one row per review finding, with its human verdict (Phase 1)
+        "findings": dao.list_findings(run_id),
         "decision": dao.get_decision(run_id),
         "error": error,
     }
@@ -485,12 +487,17 @@ def approvals(status: str = "pending", _role: str = Depends(_require("viewer")))
 
 
 class OutcomeBody(BaseModel):
-    outcome: str                 # reverted | incident | clean | generated_test_caught_bug
+    outcome: str                 # reverted | incident | clean | generated_test_caught_bug | missed_bug
     note: str | None = None
     proposal_id: int | None = None   # for generated_test_caught_bug
+    # missed_bug: a real defect in this run's change that the review did not report
+    file: str | None = None
+    line: int | None = None
+    category: str | None = None
+    description: str | None = None
 
 
-_OUTCOMES = ("reverted", "incident", "clean", "generated_test_caught_bug")
+_OUTCOMES = ("reverted", "incident", "clean", "generated_test_caught_bug", "missed_bug")
 
 
 @app.post("/api/v1/runs/{run_id}/outcome", status_code=201)
@@ -503,11 +510,16 @@ def record_outcome(run_id: str, body: OutcomeBody,
     """
     if body.outcome not in _OUTCOMES:
         raise HTTPException(400, f"outcome must be one of {list(_OUTCOMES)}")
+    if body.outcome == "missed_bug" and not (body.description or "").strip():
+        raise HTTPException(400, "missed_bug requires a description")
     if not dao.get_run(run_id):
         raise HTTPException(404, "run not found")
     payload = {"note": body.note, "recorded_by": role}
     if body.proposal_id is not None:
         payload["proposal_id"] = body.proposal_id
+    if body.outcome == "missed_bug":
+        payload.update(file=body.file, line=body.line, category=body.category,
+                       description=body.description)
     oid = dao.record_outcome(run_id, body.outcome, payload)
     dao.record_audit(run_id, actor=role, action=f"outcome_{body.outcome}", payload=payload)
     return {"outcome_id": oid, "run_id": run_id, "outcome": body.outcome}
@@ -524,7 +536,30 @@ def calibration_report(_role: str = Depends(_require("viewer"))) -> dict:
         dao.list_outcomes(),
         dao.list_all_approvals(),
         dao.list_test_proposals(limit=1000),
+        dao.list_finding_rows_for_precision(),
     )
+
+
+class VerdictBody(BaseModel):
+    verdict: str                 # real | false_positive | wont_fix
+    note: str | None = None
+
+
+_VERDICTS = ("real", "false_positive", "wont_fix")
+
+
+@app.post("/api/v1/findings/{finding_row_id}/verdict")
+def finding_verdict(finding_row_id: int, body: VerdictBody,
+                    role: str = Depends(_require("approver"))) -> dict:
+    """A human's judgement of one finding — the ground truth review precision is computed from.
+    It never changes the run's report, score or decision."""
+    if body.verdict not in _VERDICTS:
+        raise HTTPException(400, f"verdict must be one of {list(_VERDICTS)}")
+    row = dao.set_finding_verdict(finding_row_id, body.verdict, by=role,
+                                  note=(body.note or "").strip() or None)
+    if not row:
+        raise HTTPException(404, "finding not found")
+    return row
 
 
 class ProposalAction(BaseModel):
