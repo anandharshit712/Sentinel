@@ -29,8 +29,6 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallb
 ```text
 .
 ├── README.md                          ← you are here
-├── architecture.md                    # one-page architecture overview
-├── summary.md                         # project summary
 ├── coded_tools/sentinel/              # 19 deterministic coded tools
 ├── registries/                        # agent network HOCON (sentinel.hocon + manifest)
 ├── gateway/                           # Delivery Gateway (FastAPI: REST + SSE)
@@ -41,6 +39,8 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallb
 ├── scripts/                           # run_server, run_gateway, run_repo, verify_*
 ├── samples/                           # sample repos (python-payments-service, node-catalog-service)
 ├── docs/
+│   ├── architecture.md                # one-page architecture overview
+│   ├── summary.md                     # project summary
 │   ├── hackathon-delivery-intelligence.md   # original problem statement & idea (source doc)
 │   └── solution/                      # full design documentation set (start here)
 │       ├── README.md                  # index & reading order
