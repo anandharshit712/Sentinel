@@ -1,8 +1,8 @@
 """test_runner_tool (04 §5.9, A4) — executes the selected TestPlan and returns TestResults.
 
-Reads test_plan from sly_data, detects the repo's runner, runs the selected node-ids as a
-subprocess in the workspace with a scrubbed environment (no tokens/secrets) and a timeout, parses
-the result into the test_results contract and writes it to sly_data. Python/pytest (JUnit XML) and
+Reads test_plan from sly_data, detects the repo's runner, runs the selected node-ids through
+`lib.sandbox` (the run's container in docker mode) with a scrubbed environment (no tokens/secrets)
+and a timeout, parses the result into the test_results contract and writes it to sly_data. Python/pytest (JUnit XML) and
 JS-TS/jest (`--json`) are both implemented. Never raises: a timeout or a missing runner becomes a
 stage_failure in the contract.
 """
@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,12 +23,11 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
-from lib import contracts
+from lib import contracts, sandbox
 from lib.workspace import run_inputs
 
 logger = logging.getLogger("coded_tools.test_runner")
 
-_SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|API|DATABASE_URL|NVIDIA|CRED)", re.I)
 _STATUS_TAG = {"failure": "failed", "error": "error", "skipped": "skipped"}
 _JEST_STATUS = {"passed": "passed", "failed": "failed", "pending": "skipped", "todo": "skipped"}
 _EMPTY_TOTALS = {"passed": 0, "failed": 0, "skipped": 0}
@@ -38,10 +36,6 @@ _PY_MARKERS = ("pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "p
 # dirs never worth scanning/installing (vendored, build output, virtualenvs, caches)
 _PRUNE_DIRS = {"node_modules", "__pycache__", "site-packages", "dist", "build", "vendor",
                "venv", ".venv", ".tox", ".git", ".mypy_cache", ".pytest_cache"}
-
-
-def _scrubbed_env() -> Dict[str, str]:
-    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
 
 
 def _project_dirs(repo: str, configured: Any, max_depth: int = 4) -> List[str]:
@@ -130,17 +124,19 @@ def _venv_python(venv: str) -> str:
     return win if os.path.exists(win) else os.path.join(venv, "bin", "python")
 
 
-def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout: int) -> str:
+def _prepare_venv(rid: str, repo: str, proj_dirs: List[str], env: Dict[str, str], timeout: int) -> str:
     """Create a per-run venv and install each project dir's deps; return its python path.
 
-    SECURITY: `pip install -e .` runs the repo's build backend (arbitrary code) on the Gateway
-    host, so this is gated behind repo_config `install_deps: true` (an explicit per-repo allowlist),
-    never on by default. Raises on venv/pip failure or timeout; the caller turns that into a
+    SECURITY: `pip install -e .` runs the repo's build backend (arbitrary code) — on the host
+    in local sandbox mode, inside the run's container in docker mode — so this is gated behind
+    repo_config `install_deps: true` (an explicit per-repo allowlist), never on by default. Raises on venv/pip failure or timeout; the caller turns that into a
     stage_failure rather than crashing the run.
     """
     venv = os.path.join(repo, ".sentinel-venv")  # dot-prefixed -> pytest's default norecursedirs skips it
-    subprocess.run([sys.executable, "-m", "venv", venv], check=True, capture_output=True,
-                   encoding="utf-8", errors="replace", timeout=min(timeout, 180))
+    # ponytail: install-phase egress is open (nothing secret inside the sandbox to steal); add an
+    # allow-list proxy to the package registries if abuse shows up in hosted mode.
+    sandbox.run(rid, [sys.executable, "-m", "venv", venv], repo, min(timeout, 180),
+                network=True, env=env, check=True)
     py = _venv_python(venv)
     deadline = time.perf_counter() + timeout
 
@@ -148,8 +144,8 @@ def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout:
         remaining = int(deadline - time.perf_counter())
         if remaining <= 0:
             raise subprocess.TimeoutExpired("pip", timeout)
-        subprocess.run([py, "-m", "pip", "install", "-q", *a], cwd=cwd, env=env,
-                       check=True, capture_output=True, encoding="utf-8", errors="replace", timeout=remaining)
+        sandbox.run(rid, [py, "-m", "pip", "install", "-q", *a], cwd, remaining,
+                    network=True, env=env, check=True)
 
     _pip("--upgrade", "pip", cwd=repo)
     _pip("pytest", cwd=repo)  # ensure a runner even if the repo doesn't declare it
@@ -162,7 +158,7 @@ def _prepare_venv(repo: str, proj_dirs: List[str], env: Dict[str, str], timeout:
     return py
 
 
-def _has_pytest_cov(py: str, env: Dict[str, str]) -> bool:
+def _has_pytest_cov(rid: str, py: str, repo: str, env: Dict[str, str]) -> bool:
     """Is pytest-cov importable in the interpreter that will run the tests?
 
     Probed rather than assumed: the tests may run in a per-run venv built from the target repo's
@@ -171,19 +167,17 @@ def _has_pytest_cov(py: str, env: Dict[str, str]) -> bool:
     into a stage failure.
     """
     try:
-        r = subprocess.run([py, "-c", "import pytest_cov"], env=env, capture_output=True,
-                           timeout=30, check=False)
+        r = sandbox.run(rid, [py, "-c", "import pytest_cov"], repo, 30, env=env)
         return r.returncode == 0
     except Exception:
         return False
 
 
-def _collect_total(py: str, repo: str, env: Dict[str, str], timeout: int) -> int:
+def _collect_total(rid: str, py: str, repo: str, env: Dict[str, str], timeout: int) -> int:
     """Total tests pytest would collect for the WHOLE suite — the denominator for selection."""
     try:
-        r = subprocess.run([py, "-m", "pytest", "--collect-only", "-q",
-                            "-p", "no:cacheprovider"], cwd=repo, env=env,
-                           capture_output=True, encoding="utf-8", errors="replace", timeout=min(timeout, 120), check=False)
+        r = sandbox.run(rid, [py, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+                        repo, min(timeout, 120), env=env)
         m = re.search(r"(\d+)\s+tests?\s+collected", r.stdout)
         if m:
             return int(m.group(1))
@@ -217,29 +211,23 @@ def _parse_junit(path: str) -> tuple:
     return totals, cases
 
 
-def _resolve_bin(name: str) -> Optional[str]:
-    return shutil.which(name)
+def _npm_install(rid: str, npm: str, repo: str, env: Dict[str, str], timeout: int) -> None:
+    """SECURITY: `npm install` runs the repo's lifecycle scripts (arbitrary code) — same class
+    of risk as `_prepare_venv`'s `pip install -e .`, gated the same way behind repo_config
+    `install_deps`."""
+    sandbox.run(rid, [npm, "install", "--no-audit", "--no-fund"], repo, timeout,
+                network=True, env=env, check=True)
 
 
-def _npm_install(npm: str, repo: str, env: Dict[str, str], timeout: int) -> None:
-    """SECURITY: `npm install` runs the repo's lifecycle scripts (arbitrary code) on the Gateway
-    host — same class of risk as `_prepare_venv`'s `pip install -e .`, gated the same way behind
-    repo_config `install_deps`."""
-    subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=repo, env=env,
-                   check=True, capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
-                   stdin=subprocess.DEVNULL)
-
-
-def _list_jest_files(npx: str, repo: str, env: Dict[str, str], timeout: int) -> List[str]:
+def _list_jest_files(rid: str, npx: str, repo: str, env: Dict[str, str], timeout: int) -> List[str]:
     """Total test FILES jest would run — the denominator for selection (JS selection is
     file-granularity, unlike pytest's per-test-id granularity; see test_mapper_tool)."""
     try:
         # --no-install + closed stdin: never let npx prompt to download jest (would block on
         # stdin forever, orphaning a node child that deadlocks subprocess.run's post-kill pipe
         # read on Windows). If jest isn't installed, npx exits non-zero → we return [] fast.
-        r = subprocess.run([npx, "--no-install", "jest", "--listTests"], cwd=repo, env=env,
-                           capture_output=True, encoding="utf-8", errors="replace", timeout=min(timeout, 120), check=False,
-                           stdin=subprocess.DEVNULL)
+        r = sandbox.run(rid, [npx, "--no-install", "jest", "--listTests"], repo,
+                        min(timeout, 120), env=env)
         return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
     except Exception:
         return []
@@ -251,7 +239,10 @@ def _parse_jest_json(path: str, repo: str) -> tuple:
     totals = dict(_EMPTY_TOTALS)
     cases: List[Dict[str, Any]] = []
     for suite in data.get("testResults", []):
-        rel = os.path.relpath(suite.get("name", ""), repo).replace("\\", "/")
+        name = suite.get("name", "")
+        # in the sandbox jest reports container paths (/work/...), not host ones
+        rel = (name[len(sandbox.WORK) + 1:] if name.startswith(sandbox.WORK + "/")
+               else os.path.relpath(name, repo).replace("\\", "/"))
         for a in suite.get("assertionResults", []):
             status = _JEST_STATUS.get(a.get("status"), "failed")
             totals[status] = totals.get(status, 0) + 1
@@ -279,7 +270,7 @@ class TestRunnerTool(CodedTool):
                 [s["test_id"] for s in plan.get("selected", [])] + list(plan.get("smoke_set", []))))
 
             cfg = self._repo_cfg(repo_name)
-            env = _scrubbed_env()
+            env = sandbox.scrub(os.environ)
 
             # Group selected ids by the runner their extension implies so JS/TS tests never get
             # fed to pytest (or vice-versa). With no mapped ids (full-suite fallback), fall back to
@@ -293,23 +284,24 @@ class TestRunnerTool(CodedTool):
             if leftover or not ids_by_runner:
                 ids_by_runner.setdefault(_detect_runner(repo), []).extend(leftover)
 
-            payloads = [self._run(r, repo, cfg, env, rids) for r, rids in ids_by_runner.items()]
+            payloads = [self._run(str(run_id), r, repo, cfg, env, rids)
+                        for r, rids in ids_by_runner.items()]
             payload = payloads[0] if len(payloads) == 1 else _merge_payloads(payloads)
             return self._store(sly_data, run_id, payload)
         except Exception as e:
             return f"Error: {e}"
 
-    def _run(self, runner: str, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+    def _run(self, rid: str, runner: str, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
              ids: List[str]) -> Dict[str, Any]:
         if runner == "pytest":
-            return self._run_pytest(repo, cfg, env, ids)
+            return self._run_pytest(rid, repo, cfg, env, ids)
         if runner == "jest":
-            return self._run_jest(repo, cfg, env, ids)
+            return self._run_jest(rid, repo, cfg, env, ids)
         return {"runner": runner, "command": "", "totals": dict(_EMPTY_TOTALS),
                 "cases": [], "duration_seconds": 0.0, "timed_out": False,
                 "stage_failure": f"runner {runner} not supported yet"}
 
-    def _run_pytest(self, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+    def _run_pytest(self, rid: str, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
                     ids: List[str]) -> Dict[str, Any]:
         timeout = int(cfg.get("test_timeout_seconds", 900))
 
@@ -321,7 +313,7 @@ class TestRunnerTool(CodedTool):
             proj = _project_dirs(repo, cfg.get("test_project_dirs"))
             itimeout = int(cfg.get("install_timeout_seconds", 600))
             try:
-                py = _prepare_venv(repo, proj, env, itimeout)
+                py = _prepare_venv(rid, repo, proj, env, itimeout)
             except subprocess.TimeoutExpired:
                 return {"runner": "pytest", "command": "", "totals": dict(_EMPTY_TOTALS),
                        "cases": [], "duration_seconds": 0.0, "timed_out": False,
@@ -332,11 +324,12 @@ class TestRunnerTool(CodedTool):
                        "cases": [], "duration_seconds": 0.0, "timed_out": False,
                        "stage_failure": f"dependency install failed: {tail}"}
 
-        suite_total = _collect_total(py, repo, env, timeout)
+        suite_total = _collect_total(rid, py, repo, env, timeout)
         # Selection story: run only the mapped ids; if nothing mapped, fall back to the full
         # suite but LABEL it honestly (never silently "select" everything).
         selection_mode = "subset" if ids else "full_suite_fallback"
-        fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-")
+        tmp = sandbox.scratch_dir(repo)   # None locally; somewhere the sandbox can write otherwise
+        fd, xml_path = tempfile.mkstemp(suffix=".xml", prefix="sentinel-junit-", dir=tmp)
         os.close(fd)
         cmd = [py, "-m", "pytest", *ids, "--junitxml", xml_path, "-q", "-p", "no:cacheprovider"]
 
@@ -344,14 +337,13 @@ class TestRunnerTool(CodedTool):
         # in the interpreter that will run the tests. Coverage is a bonus signal: the test result
         # is the product, so a missing plugin must change nothing about the run.
         cov_path = None
-        if _has_pytest_cov(py, env):
-            fd, cov_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-cov-")
+        if _has_pytest_cov(rid, py, repo, env):
+            fd, cov_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-cov-", dir=tmp)
             os.close(fd)
             cmd += ["--cov", ".", "--cov-report", f"json:{cov_path}"]
         start = time.perf_counter()
         try:
-            subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, check=False)
+            sandbox.run(rid, cmd, repo, timeout, env=env)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -378,10 +370,10 @@ class TestRunnerTool(CodedTool):
         os.unlink(xml_path)
         return payload
 
-    def _run_jest(self, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
+    def _run_jest(self, rid: str, repo: str, cfg: Dict[str, Any], env: Dict[str, str],
                  ids: List[str]) -> Dict[str, Any]:
         timeout = int(cfg.get("test_timeout_seconds", 900))
-        npx, npm = _resolve_bin("npx"), _resolve_bin("npm")
+        npx, npm = sandbox.which("npx"), sandbox.which("npm")
         if not npx or not npm:
             return {"runner": "jest", "command": "", "totals": dict(_EMPTY_TOTALS), "cases": [],
                    "duration_seconds": 0.0, "timed_out": False,
@@ -390,7 +382,7 @@ class TestRunnerTool(CodedTool):
         if cfg.get("install_deps") and not os.path.isdir(os.path.join(repo, "node_modules")):
             itimeout = int(cfg.get("install_timeout_seconds", 600))
             try:
-                _npm_install(npm, repo, env, itimeout)
+                _npm_install(rid, npm, repo, env, itimeout)
             except subprocess.TimeoutExpired:
                 return {"runner": "jest", "command": "", "totals": dict(_EMPTY_TOTALS), "cases": [],
                        "duration_seconds": 0.0, "timed_out": False,
@@ -401,9 +393,10 @@ class TestRunnerTool(CodedTool):
                        "duration_seconds": 0.0, "timed_out": False,
                        "stage_failure": f"dependency install failed: {tail}"}
 
-        suite_total = len(_list_jest_files(npx, repo, env, timeout))  # file-granularity denominator
+        suite_total = len(_list_jest_files(rid, npx, repo, env, timeout))  # file-granularity denominator
         selection_mode = "subset" if ids else "full_suite_fallback"
-        fd, json_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-jest-")
+        fd, json_path = tempfile.mkstemp(suffix=".json", prefix="sentinel-jest-",
+                                         dir=sandbox.scratch_dir(repo))
         os.close(fd)
         # Bare positional args, not `--testPathPatterns=<a>|<b>`: jest OR's multiple bare path
         # patterns natively (stable across Jest majors, no version-flag split needed), and a
@@ -412,8 +405,7 @@ class TestRunnerTool(CodedTool):
         cmd = [npx, "--no-install", "jest", "--json", f"--outputFile={json_path}", *ids]
         start = time.perf_counter()
         try:
-            subprocess.run(cmd, cwd=repo, env=env, capture_output=True,
-                           encoding="utf-8", errors="replace", timeout=timeout, check=False, stdin=subprocess.DEVNULL)
+            sandbox.run(rid, cmd, repo, timeout, env=env)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True

@@ -68,7 +68,58 @@ reload and that the Calibration screen shows precision and missed bugs.
 
 ## 3. Phase 2 — Per-run sandbox
 
-_Filled in when the phase closes._
+**Problem.** Seventeen call sites ran repository code with a plain `subprocess.run` on the host:
+installs, tests, mutation runs, oracle probes. The blind-oracle probe even ran with the host's
+unscrubbed environment, NVIDIA key included. That is acceptable for a demo on sample repos, and
+not for strangers' code.
+
+**Design.**
+
+- **One choke point, `lib/sandbox.py`.** `run(run_id, argv, cwd, timeout, network, env)`:
+  - `SANDBOX_MODE=local` (default) is a plain subprocess, as before. It is used by host-native dev
+    and the unit tests.
+  - `SANDBOX_MODE=docker` sends the call to sandboxd.
+  - Read-only `git` and tree-sitter parsing stay in-process, because they never execute repo code.
+  - The environment is scrubbed of anything credential-shaped in both modes, and scrubbed again by
+    sandboxd, which is the trust boundary.
+- **`sandboxd/server.py`.** A stdlib-only HTTP service and the only component allowed to talk to
+  Docker (`SANDBOXD_TOKEN` bearer, binds 127.0.0.1). The Gateway calls
+  `sandbox.open_run(run_id, workspace, repo)` after the clone and `close_run(run_id)` in the run's
+  `finally`. Coded tools exec by `run_id`. In docker mode, an unknown run is an error: nothing ever
+  falls back to the host.
+- **Per-run container.**
+  - Mounts: only that run's workspace at `/work`, plus a sibling scratch dir at `/scratch`. The
+    scratch dir lives outside the repo so a copied repo does not pick up the original's
+    config files.
+  - No host environment and no secrets.
+  - Hardening: `--cap-drop ALL`, `no-new-privileges`, read-only root with a `/tmp` tmpfs.
+  - Limits: CPU and memory from `runner_quota` in `config/repo_config.yaml`, swap off, and a pids
+    limit against fork bombs.
+  - Timeouts are enforced with `timeout -k` *inside* the container, because killing `docker exec`
+    leaves the process running.
+  - The network is switched per exec: connected for the install phase, disconnected for tests,
+    mutation and oracle. Execs within one run are serialised.
+  - The container is removed with its scratch files at `close_run`. On restart, sandboxd removes
+    containers it no longer tracks.
+- **Per-repo dependency cache volume** (pip/npm), never shared between repos. *Accepted risk:* one
+  PR's install phase can poison the cache for later runs of the same repo.
+- **Image** `sandbox/Dockerfile`: Python 3.12 + Node 20 + git + pytest/pytest-cov, multi-arch.
+  Runtime via `SANDBOX_RUNTIME`: `runc` in dev, `runsc` (gVisor) for hosted.
+- **Clone hardening:** `core.symlinks=false`. A repo symlink is checked out as a plain file, so the
+  analysis tools, which read the tree on the host, cannot be pointed at another run's workspace or
+  at a host file.
+- `ponytail:` install-phase egress is open, since there is nothing secret inside the container to
+  steal. Add an allow-list proxy to package registries if hosted abuse shows up. Egress can reach
+  `host.docker.internal`, so the host's Postgres must never use trust auth.
+- In docker mode the image's interpreter has only pytest/pytest-cov. A repo that relied on the
+  Gateway venv's packages needs `install_deps: true`, which is now safe because installs run
+  inside the sandbox.
+
+**Verified by:** `tests/coded_tools/test_sandbox.py` covers both modes. Docker mode runs the real
+sandboxd HTTP server with the docker CLI faked. Still to verify against a real Docker engine: the
+escape suite `scripts/verify_sandbox.py` (fixture `samples/sandbox-escape/`, which tries to read
+env secrets, reach the network during tests, read another run's workspace and fork-bomb; each test
+passes only if its escape failed), and `verify_b4`/`verify_p3` in docker mode.
 
 ## 4. Phase 3 — Packaging
 

@@ -24,13 +24,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 from typing import Any, Dict, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
 from lib import intent as intent_mod
+from lib import sandbox
 from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("coded_tools.blind_oracle")
@@ -157,9 +157,9 @@ class BlindOracleTool(CodedTool):
         try:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(probe)
-            r = subprocess.run([sys.executable, os.path.basename(path), json.dumps(cases)],
-                               cwd=repo, capture_output=True, encoding="utf-8", errors="replace",
-                               timeout=PROBE_TIMEOUT, check=False, env=fresh_import_env())
+            # sandbox.run scrubs the env: this probe used to inherit the LLM key and DB URL
+            r = sandbox.run(run_id, [sys.executable, os.path.basename(path), json.dumps(cases)],
+                            repo, PROBE_TIMEOUT, env=fresh_import_env())
             if r.returncode != 0:
                 return {"checked": 0, "agreements": [], "disagreements": [],
                         "reason": f"could not call {function}: {(r.stderr or '')[-200:]}"}

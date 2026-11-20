@@ -32,6 +32,7 @@ import sys
 import tempfile
 from typing import Any, Dict, Optional
 
+from lib import sandbox
 from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("lib.differential")
@@ -51,14 +52,13 @@ def _git(repo: str, *args: str, timeout: int = 60) -> subprocess.CompletedProces
                           encoding="utf-8", errors="replace", timeout=timeout, check=False)
 
 
-def _run_test(cwd: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tuple[bool, str]:
+def _run_test(cwd: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT,
+              run_id: Optional[str] = None) -> tuple[bool, str]:
     """(passed, tail). A timeout counts as not passing — an unbounded test is not evidence."""
     cmd = [sys.executable, "-m", "pytest", test_rel, "-q", "-p", "no:cacheprovider", "-x",
            "--no-header"]
     try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, check=False,
-                           env=fresh_import_env(repo=cwd))
+        r = sandbox.run(run_id, cmd, cwd, timeout, env=fresh_import_env(repo=cwd))
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     return r.returncode == 0, ((r.stdout or "") + (r.stderr or ""))[-400:]
@@ -74,7 +74,8 @@ def base_has_target(repo: str, base_sha: str, target_file: str, function: str) -
 
 
 def compare(repo: str, base_sha: str, target_file: str, function: str, test_path: str,
-            test_source: str, head_passed: bool = True) -> Dict[str, Any]:
+            test_source: str, head_passed: bool = True,
+            run_id: Optional[str] = None) -> Dict[str, Any]:
     """Run `test_source` against the base commit and classify what the comparison shows.
 
     `repo` is the run workspace at head. It is never modified: the base side runs in a throwaway
@@ -97,7 +98,7 @@ def compare(repo: str, base_sha: str, target_file: str, function: str, test_path
                                f"is no earlier behaviour to compare against")
         return evidence
 
-    work = tempfile.mkdtemp(prefix="sentinel-diff-")
+    work = tempfile.mkdtemp(prefix="sentinel-diff-", dir=sandbox.scratch_dir(repo))
     tree = os.path.join(work, "base")
     try:
         add = _git(repo, "worktree", "add", "--detach", tree, base_sha, timeout=180)
@@ -110,7 +111,7 @@ def compare(repo: str, base_sha: str, target_file: str, function: str, test_path
         with open(abs_test, "w", encoding="utf-8") as fh:
             fh.write(test_source)
 
-        base_passed, tail = _run_test(tree, test_path)
+        base_passed, tail = _run_test(tree, test_path, run_id=run_id)
         evidence["base_passed"] = base_passed
         if base_passed:
             evidence.update(

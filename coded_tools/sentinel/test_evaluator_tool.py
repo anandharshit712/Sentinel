@@ -16,8 +16,8 @@ touched, or assert nothing at all. So the verdict comes from an experiment, not 
 The experiment itself lives in `lib.evaluate` (no Neuro-SAN dependency, runnable as a CLI); this
 tool adapts it to the agent network. Everything happens inside a **copy** of the run workspace,
 made per evaluation and deleted after, so neither the source repository nor the original workspace is ever written to. Note what this
-still means: the test is code a model wrote, and running it executes that code on this machine,
-sandboxed only by a temp directory and a timeout (09 §3).
+still means: the test is code a model wrote, and running it executes that code — through
+`lib.sandbox`, so in docker mode inside the run's container (09 §3).
 """
 from __future__ import annotations
 
@@ -43,7 +43,8 @@ class TestEvaluatorTool(CodedTool):
             return evaluate(workspace, target_file, function, test_source,
                             test_path=args.get("test_path") or DEFAULT_TEST_PATH,
                             base_sha=base_sha,
-                            min_score=float(args.get("min_score", DEFAULT_MIN_SCORE)))
+                            min_score=float(args.get("min_score", DEFAULT_MIN_SCORE)),
+                            run_id=sly_data.get("run_id"))
         except Exception as e:
             return f"Error: {e}"
 

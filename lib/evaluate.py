@@ -23,8 +23,8 @@ is a thin wrapper over `evaluate()`; this module is also usable on its own again
     python -m lib.evaluate --self-check
 
 Everything happens inside a **copy** of the repository, made per evaluation and deleted after, so
-the repository is never written to. The test is still code — running it executes it on this
-machine, sandboxed only by a temp directory and a timeout.
+the repository is never written to. The test is still code: every run goes through `lib.sandbox`
+(the run's container in docker mode; on this machine, under a timeout, in local mode).
 """
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 from lib import differential as differential_mod
 from lib import mutate, spec_check
+from lib import sandbox as sbx
 from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("lib.evaluate")
@@ -73,16 +74,15 @@ def is_tautology(test_source: str) -> bool:
     return True
 
 
-def _run_pytest(repo: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT) -> tuple[bool, str]:
+def _run_pytest(repo: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT,
+                run_id: Optional[str] = None) -> tuple[bool, str]:
     """(passed, tail_of_output) for one test file. A timeout counts as not passing."""
     cmd = [sys.executable, "-m", "pytest", test_rel, "-q", "-p", "no:cacheprovider",
            "-x", "--no-header"]
     try:
         # fresh_import_env: mutants are size-preserving often enough that stale bytecode would
         # silently record a live mutant as "missed" and deflate the score (lib/pyexec.py).
-        r = subprocess.run(cmd, cwd=repo, capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=timeout, check=False,
-                           env=fresh_import_env(repo=repo))
+        r = sbx.run(run_id, cmd, repo, timeout, env=fresh_import_env(repo=repo))
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     out = (r.stdout or "") + (r.stderr or "")
@@ -147,20 +147,22 @@ def _rejected(classification_reason: str, reason: str, **extra: Any) -> Dict[str
 
 def evaluate(workspace: str, target_file: str, function: str, test_source: str,
              test_path: str = DEFAULT_TEST_PATH, base_sha: Optional[str] = None,
-             min_score: float = DEFAULT_MIN_SCORE, max_mutants: int = MAX_MUTANTS) -> Dict[str, Any]:
+             min_score: float = DEFAULT_MIN_SCORE, max_mutants: int = MAX_MUTANTS,
+             run_id: Optional[str] = None) -> Dict[str, Any]:
     """Run the whole experiment for one test over one function. Raises only on bad arguments.
 
     `workspace` is a checkout of the repository at the code under test. It is copied, never
     written to; the differential tier reads its git history through a throwaway worktree.
+    `run_id` names the run's sandbox (lib.sandbox); required in docker mode.
     """
     if is_tautology(test_source):
         return _rejected("asserts nothing about the code under test",
                          "tautological: no assertion depends on the code under test")
 
-    sandbox = tempfile.mkdtemp(prefix="sentinel-eval-")
+    sandbox = tempfile.mkdtemp(prefix="sentinel-eval-", dir=sbx.scratch_dir(workspace))
     try:
         repo = os.path.join(sandbox, "repo")
-        shutil.copytree(workspace, repo, symlinks=False,
+        shutil.copytree(workspace, repo, symlinks=True,   # never follow a link out of the repo
                         ignore=shutil.ignore_patterns(".git", "node_modules", ".venv",
                                                       "__pycache__", ".pytest_cache"))
         abs_test = os.path.join(repo, test_path.replace("/", os.sep))
@@ -176,7 +178,7 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
 
         started = time.perf_counter()
         # ---- 1. must pass on correct code -----------------------------------------------
-        passed, tail = _run_pytest(repo, test_path)
+        passed, tail = _run_pytest(repo, test_path, run_id=run_id)
         if not passed:
             return _rejected("red against unmodified code",
                              "fails against unmodified code — a test that is red on correct "
@@ -189,7 +191,7 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
         for m in mutants:
             with open(abs_target, "w", encoding="utf-8") as fh:
                 fh.write(m.source)
-            still_passes, _ = _run_pytest(repo, test_path)
+            still_passes, _ = _run_pytest(repo, test_path, run_id=run_id)
             entry = {"id": m.id, "operator": m.operator, "description": m.description}
             (missed if still_passes else caught).append(entry)
         with open(abs_target, "w", encoding="utf-8") as fh:
@@ -213,7 +215,7 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
         # Runs on the ORIGINAL workspace (which has git history), not the sandbox copy.
         diff_evidence = differential_mod.compare(
             workspace, base_sha, target_file, function, test_path, test_source,
-            head_passed=True) if base_sha else {
+            head_passed=True, run_id=run_id) if base_sha else {
                 "tier": "differential", "result": differential_mod.UNKNOWN,
                 "reason": "no base commit supplied for this run"}
 

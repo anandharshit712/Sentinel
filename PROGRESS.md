@@ -140,7 +140,7 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 |---|---|---|---|
 | 0 | Model health | ✅ | 2026-11-14: chain `nemotron-3-ultra` → `mistral-large-4-1t-a52b` → `gpt-oss-20b`, probe 3/3, `verify_b4` PASS |
 | 1 | Measure review quality | ✅ | 2026-11-20. Findings stored as rows (migration 0005), human verdicts, `missed_bug` outcome, precision by source × dimension / repo / version, `runs.sentinel_version`. `verify_p1m` 11/11 (real DB, no LLM); browser check 7/7 (a verdict and its note persist across a reload, "previously marked" shown, Calibration shows precision + missed bugs). No real precision numbers yet: that needs real runs judged by a person |
-| 2 | Per-run sandbox | ⬜ | |
+| 2 | Per-run sandbox | 🟡 | **Built, Docker gates not run.** `lib/sandbox` choke point (local + docker), `sandboxd`, sandbox image, escape fixture + `verify_sandbox.py`, all repo-executing call sites routed through it, Gateway calls `open_run`/`close_run`, clone `core.symlinks=false`, blind-oracle env now scrubbed. Unit tests pass in both modes (docker mode against the real sandboxd with the docker CLI faked). **Left: the escape suite and `verify_b4`/`verify_p3` in `SANDBOX_MODE=docker` — the Docker engine was not running on 2026-11-20.** gVisor (`runsc`) is configurable but provable only on a Linux host |
 | 3 | Packaging (Docker) | ⬜ | |
 | 4 | Accounts, tenancy, BYOK | ⬜ | |
 | 5 | CI platforms | ⬜ | |

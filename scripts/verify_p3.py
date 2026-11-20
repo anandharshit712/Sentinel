@@ -23,6 +23,7 @@ import tempfile
 import uuid
 
 from db import dao
+from lib import sandbox
 from neuro_san.client.agent_session_factory import AgentSessionFactory
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor
 
@@ -125,7 +126,13 @@ def main(argv) -> int:
         # done. A verification that can pass on stale rows verifies nothing.
         run_id = str(uuid.uuid4())
         ws, base_sha, head_sha = _fixture()
-        sly, gaps = _prepare(ws, run_id, base_sha, head_sha)
+        sandbox.open_run(run_id, ws, "p3-demo")      # no-op unless SANDBOX_MODE=docker
+        try:
+            sly, gaps = _prepare(ws, run_id, base_sha, head_sha)
+            struct, out = _generate(sly, host, port) if any(
+                g["status"] != "covered" for g in gaps.get("gaps", [])) else ({}, {})
+        finally:
+            sandbox.close_run(run_id)
         ok, notes = True, []
 
         found = [g for g in gaps.get("gaps", []) if g["status"] != "covered"]
@@ -133,7 +140,6 @@ def main(argv) -> int:
                      f"{found[0]['function'] + ' ' + found[0]['status'] if found else 'none'}")
         ok = ok and bool(found)
 
-        struct, out = _generate(sly, host, port) if found else ({}, {})
         proposals = dao.list_test_proposals(run_id)
         notes.append(f"{'ok ' if proposals else 'MISSING'} proposal recorded ({len(proposals)})")
         ok = ok and bool(proposals)

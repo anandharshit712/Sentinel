@@ -16,6 +16,7 @@ import uuid
 import tempfile
 
 from db import dao
+from lib import sandbox
 from neuro_san.client.agent_session_factory import AgentSessionFactory
 from neuro_san.client.streaming_input_processor import StreamingInputProcessor
 
@@ -65,13 +66,17 @@ def _run(ws, base, head, to_env, host, port):
              "requested_by": "tester"}
     dao.ensure_run(_rid(f"b4-{to_env}"), event)
     sly = {"run_id": _rid(f"b4-{to_env}"), "event": event, "repo_workspace": ws}
-    session = AgentSessionFactory().create_session("http", "sentinel", hostname=host, port=port)
-    proc = StreamingInputProcessor(session=session)
-    mp = proc.get_message_processor()
-    req = proc.formulate_chat_request("Process this DeliveryEvent: " + json.dumps(event), sly)
-    for r in session.streaming_chat(req):
-        mp.process_message(r.get("response", {}), r.get("type"))
-    return mp.get_structure(), (mp.get_sly_data() or {})
+    sandbox.open_run(sly["run_id"], ws, event["repo"]["name"])   # no-op unless SANDBOX_MODE=docker
+    try:
+        session = AgentSessionFactory().create_session("http", "sentinel", hostname=host, port=port)
+        proc = StreamingInputProcessor(session=session)
+        mp = proc.get_message_processor()
+        req = proc.formulate_chat_request("Process this DeliveryEvent: " + json.dumps(event), sly)
+        for r in session.streaming_chat(req):
+            mp.process_message(r.get("response", {}), r.get("type"))
+        return mp.get_structure(), (mp.get_sly_data() or {})
+    finally:
+        sandbox.close_run(sly["run_id"])
 
 
 def main(host="localhost", port=8080):
