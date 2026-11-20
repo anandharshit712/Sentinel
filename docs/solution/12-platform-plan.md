@@ -1,6 +1,7 @@
 # 12 — Platform plan: measured reviews, sandbox, packaging, tenancy, CI, test generation in CI
 
-Status: in progress (2026-11-20). Documents 01–07 describe the hackathon build and stay frozen;
+Status: built (2026-11-20). The gates that need a Docker engine, Keycloak, or a user's own OAuth apps
+and GitLab project are listed in `PROGRESS.md` §7b as partial, each with the reason. Documents 01–07 describe the hackathon build and stay frozen;
 08–11 cover the post-hackathon phases. This document covers turning Sentinel into something a
 stranger can self-host with `docker compose up`, and that can be hosted for others safely.
 Deployment itself is out of scope here.
@@ -379,4 +380,14 @@ The script is idempotent, and the old label is kept under `evaluation.reclassifi
 
 ## 9. Phase 8 — Open-source readiness
 
-_Filled in when the phase closes._
+- **README.**
+  - "Self-host with Docker": clone → `cp .env.example .env` → `docker compose … up`, plus a
+    `verify_b4` check run inside the Gateway container.
+  - Hosted-mode setup (OAuth app callbacks, which secrets).
+  - "What runs where, and what leaves the box": the sandbox, LLM provider traffic under whose key,
+    licence lookups, row-level security, CI credentials.
+  - "CI integration" per platform, with the self-hosted-runner warning.
+  - Repository layout covering `deploy/`, `sandbox/`, `sandboxd/` and `ci-templates/`.
+- **`.env.example`** documents every variable.
+- **The gate** (fresh clone → README only → working stack, `verify_b4` PASS) needs a Docker engine,
+  which was not available on 2026-11-20.

@@ -38,6 +38,9 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallb
 ├── config/                            # risk/ladder/repo + LLM config
 ├── scripts/                           # run_server, run_gateway, run_repo, verify_*
 ├── samples/                           # sample repos (python-payments-service, node-catalog-service)
+├── sandbox/  sandboxd/                # per-run container image + the service that runs it
+├── deploy/                            # Dockerfiles, compose.yaml, Postgres init, Keycloak realm
+├── ci-templates/                      # GitLab CI + Jenkins gates (GitHub's lives in .github/workflows)
 ├── docs/
 │   ├── architecture.md                # one-page architecture overview
 │   ├── summary.md                     # project summary
@@ -50,7 +53,9 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallb
 │       ├── 04-lld.md                  # low-level design (HOCON, coded tools, DDL, APIs)
 │       ├── 05-architecture-diagram.md # six architecture views
 │       ├── 06-frontend-design.md      # dashboard SPA design
-│       └── 07-implementation-plan.md  # phased build plan
+│       ├── 07-implementation-plan.md  # phased build plan
+│       └── 08–12                      # post-hackathon: review cluster, test generation,
+│                                      #   learning loop, oracle evidence, platform plan
 └── neuro-san-studio/                  # clone of cognizant-ai-lab/neuro-san-studio
                                        # (framework reference: examples, docs, tooling)
 ```
@@ -67,6 +72,7 @@ Primary LLM provider: **NVIDIA NIM** (`nvidia/nemotron-3-super-120b-a12b`, fallb
 | [05 · Architecture](docs/solution/05-architecture-diagram.md)   | The pictures: landscape, containers, agent topology, signal flow, deployments                                                                |
 | [06 · Frontend Design](docs/solution/06-frontend-design.md)     | Decision Dashboard SPA: stack, routes, components, data/SSE layer, design system                                                            |
 | [07 · Implementation Plan](docs/solution/07-implementation-plan.md) | Contract-first phased build: tracer bullet, tracks A–D, milestones, risk register                                                       |
+| [12 · Platform Plan](docs/solution/12-platform-plan.md)         | Self-hosting and hosting: measured review precision, per-run sandbox, Docker, accounts/tenancy/BYOK, CI platforms, test generation in CI |
 
 All diagrams are Mermaid — rendered natively by GitHub and VS Code (Markdown Preview Mermaid Support extension).
 
@@ -92,10 +98,66 @@ The tail — environment context, risk score, trust ladder, decision, CI/CD acti
 1. **Happy path** — small clean change → clean review → small test subset passes → low risk → auto-promote (dev→test) with visible reasoning trail.
 2. **The escalation (money shot)** — change touches auth module with planted string-concatenated SQL → Security agent flags **Critical** → risk spikes **although all tests pass** → gate escalates to human approval, reasoning trail citing the finding. Binary CI gating structurally cannot do this.
 
+## Self-host with Docker
+
+Prereqs: Docker Engine 26+ (Docker Desktop works) and an NVIDIA NIM API key.
+
+```bash
+git clone https://github.com/anandharshit712/Sentinel.git && cd Sentinel
+cp .env.example .env
+# edit .env — REQUIRED: NVIDIA_API_KEY, POSTGRES_PASSWORD, SENTINEL_DB_PASSWORD, SANDBOXD_TOKEN,
+#             API_TOKENS (e.g. <random>:admin) — generate secrets with:
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+docker compose -f deploy/compose.yaml --env-file .env up -d --build
+```
+
+Open http://localhost:8000/ and sign in with your admin token. The first build takes a few minutes.
+Migrations run when the Gateway starts. To check the install, run the demo pipeline against it:
+
+```bash
+# TMPDIR: the fixture repos must live on the shared workspace volume the sandbox can mount
+docker compose -f deploy/compose.yaml --env-file .env exec -e TMPDIR=/workspaces gateway python scripts/verify_b4.py
+```
+
+**Hosted mode** adds accounts (Keycloak, `--profile hosted`, `AUTH_MODE=oidc`, `LLM_KEY_SOURCE=sly_data`).
+
+1. Create a GitHub OAuth app and a GitLab application with these callbacks:
+   - `http://localhost:8180/realms/sentinel/broker/github/endpoint`
+   - `http://localhost:8180/realms/sentinel/broker/gitlab/endpoint`
+2. Put their client ids and secrets in `.env`, together with `KEYCLOAK_CLIENT_SECRET`,
+   `KEYCLOAK_ADMIN_PASSWORD`, `SENTINEL_SECRET_KEY` (`python -m lib.secretbox --new-key`) and
+   `SENTINEL_ADMIN_EMAILS`.
+3. Start the stack with `--profile hosted`.
+
+Users then sign in, link GitHub or GitLab, register repos they administer, and add their own NIM
+key. See [12 §5](docs/solution/12-platform-plan.md).
+
+### What runs where, and what leaves the box
+
+- **Repository code** (installs, tests, mutation runs, oracle probes) runs only inside a per-run
+  container that sandboxd creates and destroys:
+  - it mounts only that run's workspace;
+  - it gets no secrets and no host environment;
+  - the network is on only for dependency installs;
+  - CPU, memory and process limits apply.
+
+  sandboxd is the only service with the Docker socket.
+- **Code snippets and diffs** go to the LLM provider (NVIDIA NIM). Self-hosted, they go under your
+  key. Hosted, they go under each account's own key, which is encrypted at rest and handed to one
+  run at a time.
+- **Licence lookups** query PyPI and npm for newly added dependency names only. Turn them off with
+  `SENTINEL_LICENSE_LOOKUP=off`.
+- **Tenancy** (hosted) is enforced by Postgres row-level security, not just the API. A request that
+  forgets to authenticate sees nothing.
+- **CI credentials** stay in your CI platform's secret store. GitHub and GitLab use short-lived OIDC
+  job tokens. Jenkins uses a per-repo key, stored hashed.
+
 ## Quickstart (host-native dev)
 
 Prereqs: Python 3.12 + `.venv` (neuro-san 0.6.71), local PostgreSQL 17 (schema `sentinel`,
-`DATABASE_URL` in `.env`), Node 20+, an `NVIDIA_API_KEY` in `.env`.
+`DATABASE_URL` in `.env`; the role must not be a superuser, or row-level security is bypassed),
+Node 22+, an `NVIDIA_API_KEY` in `.env`. Repository code runs as plain subprocesses here
+(`SANDBOX_MODE=local`), so use host-native mode only for repos you trust.
 
 **One command (Windows):** `.\run.ps1` — migrates the DB, builds the dashboard, starts both
 servers, opens http://localhost:8000/. Flags: `-Demo` (run both demo runs after startup),
@@ -131,7 +193,7 @@ PYTHONPATH=. .venv/Scripts/python scripts/demo_live.py
 # open the printed http://localhost:8000/runs/<id> immediately
 ```
 
-Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (85).
+Tests: `PYTHONPATH=. .venv/Scripts/python -m pytest -q` (293).
 
 ## Running on real repos
 

@@ -26,7 +26,7 @@ A row is never ✅ because the code exists. It is ✅ when something proves it w
 | P4 — learning loop | ✅ complete | 100% |
 | Oracle evidence (doc 11) | ✅ complete | 100% |
 | P5 — polish & showcase | ✅ complete | 100% |
-| Platform track ([12](docs/solution/12-platform-plan.md)) | 🟡 in progress: Phase 1 done, Phases 2–8 open | 13% |
+| Platform track ([12](docs/solution/12-platform-plan.md)) | 🟡 all eight phases built; Phases 1, 6, 7 fully proven, GitHub CI + BYOK proven live; the rest wait on Docker, Keycloak, OAuth apps or a GitLab project (§7b) | 85% |
 | P7 — production track | ⬜ deliberately deferred | 0% |
 
 **Inventory:** 27 coded tools · 13 agents across 2 networks · 17 lib modules · 10 verification
@@ -146,7 +146,7 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | 5 | CI platforms | 🟡 | **GitHub ✅ proven live** 2026-11-20 on ORION PR #12: OIDC job token accepted, run completed, PR comment posted, check failed on `escalate` as designed (the escalation itself exposed two scoring issues, logged in PENDING #2/#3). GitLab template (`id_tokens`, MR note) and Jenkinsfile (API key) built. **Left: GitLab needs the user's gitlab.com project; Jenkins proof needs a local Jenkins container (Docker not running)** |
 | 6 | Test generation in CI | ✅ | 2026-11-20. Deterministic `lib/untested.py` rule (coverage / existing test / PR-added test, both languages, capped), Gateway auto-generation after the decision (CI runs only, background, BYOK), JS/TS via Jest coverage + Stryker 10.1.1, advisory CI step posting accepted tests. `verify_p6_js` 4/4 (Stryker 1.00, 11/11), zero-candidate run → 0 model calls, `verify_p3` 3/3, `test_p6.py` 34 tests. Docker-mode JS run not exercised yet (no Docker) |
 | 7 | Licence resolution, `spec_check` invariants, proposals 9–14 | ✅ | 2026-11-20. Licence lookup (PyPI/npm, 30-lookup budget, 7-day cache, unresolved ≠ clean, max `medium`, live-checked: pyqt5 → GPL v3 finding, 404 → unresolved). Three `spec_check` invariants, each 0 FP on `humanize` (bounds/idempotence judged nothing there; type preservation 0/29, 13 real annotation bugs found in the wider stdlib scan). Proposals 9–14 relabelled `characterization` after a `pg_dump` backup; old labels kept under `evaluation.reclassified_from`. `test_p7.py` + full suite green |
-| 8 | Open-source readiness | ⬜ | |
+| 8 | Open-source readiness | 🟡 | README self-host guide (compose quickstart, hosted setup, "what runs where, what leaves the box", CI per platform, layout), `.env.example`. **Left: the fresh-clone → README-only → `verify_b4` PASS gate — needs Docker (not running on 2026-11-20)** |
 
 ## 8. Open items, and why each is still open
 

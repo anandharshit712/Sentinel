@@ -118,4 +118,7 @@ def main(host="localhost", port=8080):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import os
+    # in compose the agents are the `neuro-san` service, not localhost (the Gateway's own setting)
+    sys.exit(main(os.environ.get("NEURO_SAN_HOST", "localhost"),
+                  int(os.environ.get("NEURO_SAN_PORT", "8080"))))
