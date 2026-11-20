@@ -6,19 +6,27 @@ read sly_data.
 
 It first establishes the project's OWN declared licence from the workspace (`package.json`,
 `pyproject.toml`, `LICENSE`), because that is what makes a copyleft notice in the diff a conflict
-rather than a note. `licenses_seen` reports what was actually inspected — the tool does not resolve
-each dependency's licence, which needs a registry lookup per dependency and is out of scope for
-this phase (08 §3 P2.3). Saying so beats implying a dependency audit that did not happen.
+rather than a note.
+
+Dependencies the diff ADDS (requirements*.txt, pyproject.toml PEP 621 arrays, package.json) have
+their licence looked up in PyPI / npm (`license_rules.resolve_licenses`: bounded, cached 7 days).
+Copyleft becomes one aggregated finding capped at `medium`, so a licence alone never fails the gate.
+A dependency that could not be resolved is listed as `unresolved` with the reason and is never
+counted as clean. `licenses_seen` reports what was actually inspected.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import re
+import tomllib
 from typing import Any, Dict, List, Union
 
 import yaml
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from coded_tools.sentinel.dependency_cve_tool import _added_deps
 from lib import license_rules, triage
 from lib.workspace import run_inputs
 
@@ -26,6 +34,7 @@ logger = logging.getLogger("coded_tools.license_scanner")
 
 _SNIPPET_CAP = 200
 _LLM_FINDINGS_CAP = 50
+_DEP_ROWS_CAP = 60
 _METADATA = ("package.json", "pyproject.toml", "LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING")
 
 
@@ -67,6 +76,17 @@ class LicenseScannerTool(CodedTool):
                                  for ln in range(1, max(lines) + 1))
                 findings.extend(license_rules.scan_file(path, text, lines.keys(), family))
 
+            deps = [("npm" if p.endswith("package.json") else "pypi", name, p)
+                    for name, _ver, p in _added_deps(profile)]
+            deps += self._pyproject_deps(profile, repo_ws)
+            rows = license_rules.resolve_licenses([(eco, name) for eco, name, _p in deps])
+            manifest = {(eco, name): p for eco, name, p in deps}
+            for r in rows:
+                r["manifest"] = manifest[(r["ecosystem"], r["name"])]
+            # first, so the per-call cap below can never cut the dependency verdict
+            findings[:0] = license_rules.dependency_findings(rows, deps[0][2] if deps else "")
+            unresolved = [r for r in rows if r["status"] == "unresolved"]
+
             snippets = [{"file": p, "line": ln, "code": c}
                         for p, lines in by_file.items() for ln, c in sorted(lines.items())][:_SNIPPET_CAP]
 
@@ -75,11 +95,49 @@ class LicenseScannerTool(CodedTool):
             return {"findings": findings[:_LLM_FINDINGS_CAP], "findings_total": len(findings),
                     "added_lines": snippets,
                     "project_license": declared or "unknown", "license_family": family,
-                    "licenses_seen": ["project declaration", "licence notices in changed files"],
-                    "note": "Dependency licences are NOT resolved (needs a registry lookup per "
-                            "dependency); this is the project's own licence plus notices in the diff."}
+                    "licenses_seen": ["project declaration", "licence notices in changed files",
+                                      "registry licence of each added dependency"],
+                    "dependency_licenses": rows[:_DEP_ROWS_CAP], "dependencies_total": len(rows),
+                    "note": (f"{len(rows) - len(unresolved)} of {len(rows)} added dependency "
+                             f"licence(s) resolved from the registry (latest release)."
+                             + (f" {len(unresolved)} UNRESOLVED — not checked, NOT clean: "
+                                + "; ".join(f"{r['name']}: {r['reason']}" for r in unresolved[:10])
+                                if unresolved else ""))}
         except Exception as e:
             return f"Error: {e}"
+
+    @staticmethod
+    def _pyproject_deps(profile: Dict[str, Any], repo_ws: str | None) -> List[tuple]:
+        """("pypi", name, path) for PEP 621 dependencies whose line the diff adds.
+
+        An added line alone cannot tell `"requests>=2",` in `dependencies` from `"cli",` in
+        `keywords`, so the names come from the parsed file in the workspace and the diff only says
+        which of them are new. No workspace -> nothing (missed, never invented). Poetry tables are
+        not read.
+        """
+        out = []
+        for f in profile.get("files", []) or []:
+            path = f.get("path", "")
+            if path.rsplit("/", 1)[-1] != "pyproject.toml" or not repo_ws:
+                continue
+            try:
+                with open(os.path.join(repo_ws, path), "rb") as fh:
+                    doc = tomllib.load(fh)
+            except (OSError, ValueError):
+                continue
+            proj = doc.get("project") or {}
+            specs = list(proj.get("dependencies") or [])
+            groups = list((proj.get("optional-dependencies") or {}).values())
+            groups += list((doc.get("dependency-groups") or {}).values())
+            for group in groups:
+                if isinstance(group, list):
+                    specs += group
+            declared = {m.group(1).lower() for s in specs if isinstance(s, str)
+                        for m in [re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", s)] if m}
+            added = " ".join(c for p, _ln, c in triage.iter_added_lines({"files": [f]}))
+            out += [("pypi", n, path) for n in sorted(declared)
+                    if re.search(r"""["']\s*""" + re.escape(n) + r"(?![A-Za-z0-9._-])", added, re.I)]
+        return out
 
     @staticmethod
     def _metadata_files(repo_ws: str | None) -> Dict[str, str]:
@@ -95,7 +153,8 @@ class LicenseScannerTool(CodedTool):
         return out
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
-        return self.invoke(args, sly_data)
+        # registry lookups block for up to LOOKUP_TIMEOUT s; keep them off the event loop
+        return await asyncio.to_thread(self.invoke, args, sly_data)
 
 
 def demo() -> None:

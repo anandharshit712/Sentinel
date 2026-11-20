@@ -64,7 +64,7 @@ scripts · 4 migrations · 12 design documents.
 | P2.2 | `lib/perf_rules.py` | ✅ | real loop/async context, not flat regex |
 | P2.3 | `lib/license_rules.py` | ✅ | |
 | P2.4 | `performance_scanner` | ✅ | |
-| P2.5 | `license_scanner` | 🟡 | **Left: resolving each dependency's licence.** Needs a registry lookup per dependency with caching and offline handling. The tool says so in its output rather than implying an audit it did not do |
+| P2.5 | `license_scanner` | ✅ | Dependency licences resolved since 2026-11-20 (platform Phase 7): PyPI/npm lookups, cache, offline → `unresolved` (never clean) |
 | P2.6 | Two reviewer agents in the network | ✅ | |
 | P2.7 | Four-dimension merge in `report_publisher` | ✅ | |
 | P2.8 | Gateway + SPA | ✅ | |
@@ -145,7 +145,7 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | 4 | Accounts, tenancy, BYOK | 🟡 | **Built; DB isolation and BYOK proven; Keycloak not run yet.** Migrations 0006 (accounts/identities/repos/keys/llm_keys) + 0007 (FORCE row-level security, deny-by-default scope, account-filling trigger); Gateway OIDC sign-in (BFF cookies + refresh), link gate, repo ownership (GitHub admin / GitLab Maintainer / `.sentinel-verify`), CI auth (OIDC job tokens + hashed per-repo API keys, `POST /api/v1/ci/runs`), quotas, suspend/revoke, 90-day retention purge, privacy page, Settings/Admin screens. `test_tenancy.py` 23/23 incl. real-DB RLS (A cannot read or write B's rows by direct id). **`verify_byok.py` PASS live** (no key → refused even with the server's env key; key in sly_data → promote; key in no log/thinking file). **Left: `verify_tenancy.py` and the realm import need Keycloak (Docker not running on 2026-11-20); live GitHub/GitLab linking needs the user's OAuth apps** |
 | 5 | CI platforms | ⬜ | |
 | 6 | Test generation in CI | ⬜ | |
-| 7 | Licence resolution, `spec_check` invariants, proposals 9–14 | ⬜ | |
+| 7 | Licence resolution, `spec_check` invariants, proposals 9–14 | ✅ | 2026-11-20. Licence lookup (PyPI/npm, 30-lookup budget, 7-day cache, unresolved ≠ clean, max `medium`, live-checked: pyqt5 → GPL v3 finding, 404 → unresolved). Three `spec_check` invariants, each 0 FP on `humanize` (bounds/idempotence judged nothing there; type preservation 0/29, 13 real annotation bugs found in the wider stdlib scan). Proposals 9–14 relabelled `characterization` after a `pg_dump` backup; old labels kept under `evaluation.reclassified_from`. `test_p7.py` + full suite green |
 | 8 | Open-source readiness | ⬜ | |
 
 ## 8. Open items, and why each is still open
@@ -156,7 +156,6 @@ Closed the hole where a test asserting a bug scored 0.83 and read "accepted".
 | Model chain (resolved 2026-11-14) | **Closed.** The probe found the primary `nemotron-3-super` returning HTTP 404 ("Function … Not found for account", though `/v1/models` still lists it) and `glm-5.3-flash` still timing out at 120s. Under the standing rule (probe 3/3 **and** `verify_b4` PASS) the chain is now `nemotron-3-ultra` → `mistral-large-4-1t-a52b` → `gpt-oss-20b`; `.env` `MODEL_NAME` moved to `nvidia-nemotron-3-ultra` (it overrides the whole network, so it was pointing every agent at the dead model). `probe_models.py` 3/3 usable, `verify_b4` PASS (happy → promote, insecure → escalate at risk 100, 1 critical, health 51) | Re-probe before trusting it; NIM health swings hour to hour |
 | LLM-reviewer contribution (answered 2026-10-09) | **Answered.** Every security finding on every real repo came from the deterministic floor. On ORION, after the fixes, 2 of 17 LLM findings were real and beyond any rule, 4 were false positives (two at critical), 1 duplicated the floor and 10 restated complexity numbers. Earlier trials show the same shape (e.g. hardcoded Windows dataset paths on Accident_Detection_System). For three months the layer was silently non-functional because of four defects, none of them the model. See [real-repo-trials §1](docs/writeup/real-repo-trials.md) | — |
 | C3 webhook route | Superseded for the demo by the GitHub Action | Only needed for real webhook intake (P7) |
-| Dependency licence resolution | Needs per-dependency registry lookups | A decision to take on network calls inside a coded tool |
 
 ## 9. Deliberately excluded
 

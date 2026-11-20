@@ -20,6 +20,8 @@ logger = logging.getLogger("coded_tools.dependency_cve")
 
 _REQ = re.compile(r"^([A-Za-z0-9._-]+)\s*(?:[=<>!~]=?\s*([0-9][0-9A-Za-z.\-]*))?")
 _PKGJSON = re.compile(r'"([A-Za-z0-9._@/-]+)"\s*:\s*"[\^~>=<]*([0-9][0-9A-Za-z.\-]*)"')
+# package.json keys whose value looks like a version but which are not dependencies.
+_PKGJSON_NOT_DEPS = {"version", "node", "npm", "yarn", "pnpm"}
 
 
 def _ver_tuple(v: str) -> Tuple[int, ...]:
@@ -48,12 +50,13 @@ def _affected(version: str, specifiers: List[str]) -> bool:
 
 
 def _added_deps(profile: Dict[str, Any]) -> List[Tuple[str, str, str]]:
-    """(package, version|None, manifest_path) for deps added in requirements.txt / package.json."""
+    """(package, version|None, manifest_path) for deps added in requirements*.txt / package.json."""
     deps: List[Tuple[str, str, str]] = []
     for f in profile.get("files", []):
         path = f.get("path", "")
-        is_req = path.endswith("requirements.txt")
-        is_pkg = path.endswith("package.json")
+        base = path.rsplit("/", 1)[-1]
+        is_req = bool(re.fullmatch(r"requirements[\w.-]*\.txt", base))
+        is_pkg = base == "package.json"
         if not (is_req or is_pkg):
             continue
         for h in f.get("hunks", []):
@@ -63,11 +66,12 @@ def _added_deps(profile: Dict[str, Any]) -> List[Tuple[str, str, str]]:
                 content = line[1:].strip()
                 if is_req:
                     m = _REQ.match(content)
-                    if m and content and not content.startswith("#"):
+                    # "-r base.txt", "-e ." and "--index-url" are pip options, not packages
+                    if m and content and not content.startswith(("#", "-")):
                         deps.append((m.group(1).lower(), m.group(2), path))
                 else:
                     m = _PKGJSON.search(content)
-                    if m:
+                    if m and m.group(1).lower() not in _PKGJSON_NOT_DEPS:
                         deps.append((m.group(1).lower(), m.group(2), path))
     return deps
 

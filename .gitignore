@@ -25,3 +25,6 @@ coverage.json
 coverage.xml
 htmlcov/
 lcov.info
+
+# registry licence cache (lib/license_rules.py, 7-day TTL) — regenerable
+.cache/

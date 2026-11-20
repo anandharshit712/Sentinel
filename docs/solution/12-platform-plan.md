@@ -217,7 +217,63 @@ _Filled in when the phase closes._
 
 ## 8. Phase 7 — Remaining agreed items
 
-_Filled in when the phase closes._
+**Licence resolution** (`lib/license_rules.py`, `license_scanner`).
+
+- **What is looked up.** Dependencies the diff adds in `requirements*.txt`, `package.json` and
+  `pyproject.toml` (PEP 621 dependencies, optional-dependencies and dependency-groups). Poetry
+  tables are not read.
+- **Where.** PyPI `/pypi/<name>/json` and the npm registry `/<name>/latest`. Both use the latest
+  release; the manifest's version range is not solved. PyPI trove classifiers are read before the
+  free-text `license` field, because some packages paste the whole licence text into that field.
+- **Limits.** stdlib `urllib`, 5 s timeout, at most 30 lookups per call. The first unreachable
+  registry stops further lookups, so being offline costs one timeout, not thirty.
+- **Cache.** `.cache/licenses/`, 7-day TTL, successful lookups only (gitignored).
+  `SENTINEL_LICENSE_LOOKUP=off` reads the cache only, for air-gapped installs and the test suite.
+- **Unresolved.** A package whose licence could not be resolved is reported per package with its
+  reason, and the note says it is "not checked, NOT clean". It never counts as permissive.
+- **Findings.** One finding per licence family per call:
+  - copyleft (GPL/AGPL/SSPL/EUPL/CC-BY-SA): `medium`
+  - weak copyleft (LGPL/MPL/EPL): `low`
+
+  Licence findings alone add about 7 risk points at most, which stays inside the low band, so a
+  licence can never fail the gate on its own.
+- **Live check.** pyqt5 resolved as GPL v3 → one medium finding. requests, react and
+  `@types/node` resolved as permissive. A nonexistent package came back unresolved (HTTP 404).
+
+**`spec_check` invariants** (`lib/spec_check.py`). All three are static: each compares something
+the author wrote (a docstring or annotation) with literal values on the code's paths. Like the
+existing checks, they never say which side is wrong.
+
+- **Bounds:** the docstring promises a range or "non-negative", and a literal return falls outside
+  it.
+- **Idempotence:** the docstring promises idempotence, and the function unconditionally appends to
+  or increments state that outlives the call.
+- **Type preservation:** a literal return contradicts the return annotation (int-for-float allowed;
+  a `None` return is allowed when the docstring mentions None).
+
+The agreed gate was zero false positives on the `humanize` trial set (`scripts/spec_check_fp.py`,
+humanize `785e5dc`, 9 trial functions / all 37 in `src`):
+
+| Invariant | Judged | Fired | Kept |
+|---|---|---|---|
+| bounds | 0 / 0 | 0 / 0 | yes |
+| idempotence | 0 / 0 | 0 / 0 | yes |
+| type preservation | 9 / 29 | 0 / 0 | yes |
+
+Caveats, stated with the numbers:
+
+- Bounds and idempotence pass only because no humanize docstring makes those claims.
+- Type preservation was tuned on the trial set: before the "None mentioned in the docstring" rule,
+  it fired once, on `clamp`.
+- Outside the trial set, over the Python 3.12 stdlib and its site-packages (300,355 functions):
+  - bounds judged 21 and fired 0
+  - idempotence judged 21 and fired 0
+  - type preservation judged 42,458 and fired 13; all 13 are real annotation-versus-code
+    disagreements, for example urllib3's `-> bytes` returning `None`.
+
+**Proposals 9–14** were relabelled `characterization` by `scripts/mark_unverified_proposals.py`.
+The script is idempotent, and the old label is kept under `evaluation.reclassified_from`. A
+`pg_dump` of the schema was taken first.
 
 ## 9. Phase 8 — Open-source readiness
 

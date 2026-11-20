@@ -3,10 +3,7 @@
 The floor for `compliance_review_agent`, same contract as every other floor in this project: it
 fires from code, so a drifting reviewer cannot produce a clean compliance report (rule 4).
 
-**What this deliberately does not do.** Resolving the licence of each declared dependency needs a
-registry lookup (PyPI/npm) — a network call per dependency, from inside a coded tool, on every run.
-That is a real feature with real caching and offline-failure questions, and it is not this phase.
-What IS provable offline is checked here:
+Checked offline:
 
   * the project's own declared licence (manifest field or LICENSE file),
   * copyleft notices in the changed files themselves — vendored GPL/AGPL source, which is the
@@ -15,23 +12,37 @@ What IS provable offline is checked here:
   * PII written to logs or URLs,
   * deprecated APIs.
 
-`licenses_seen` is reported so the report says what was actually inspected instead of implying a
-full dependency audit.
+Checked online (`resolve_licenses`, 12 §8): the licence of each dependency the diff ADDS, from the
+PyPI JSON API or the npm registry (latest release — the range in the manifest is not solved).
+Lookups are bounded (`MAX_LOOKUPS` per call, `LOOKUP_TIMEOUT` s each, the first unreachable registry
+stops the rest) and cached on disk for `CACHE_TTL`. Anything not positively classified — offline,
+registry error, budget spent, or a licence string this module does not recognise — is `unresolved`,
+which is never the same as clean. `SENTINEL_LICENSE_LOOKUP=off` keeps every lookup offline (cache
+only) for air-gapped installs and for the test suite.
+
+`licenses_seen` is reported so the report says what was actually inspected.
 
     python -m lib.license_rules        # self-check
 """
 from __future__ import annotations
 
 import json
+import os
 import re
-from typing import Any, Dict, Iterable, List, Tuple
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-# SPDX-ish families. Only what a diff can plausibly contain; a full SPDX matrix is overkill for a
-# check whose input is a licence *notice*, not a resolved dependency graph.
-COPYLEFT = ("agpl", "gpl-3", "gpl-2", "gplv3", "gplv2", "gnu general public license",
-            "gnu affero", "sspl", "cc-by-sa", "cc by-sa")
-WEAK_COPYLEFT = ("lgpl", "mpl-2", "mozilla public license", "epl-2", "eclipse public license")
-PERMISSIVE = ("mit", "apache-2", "apache license", "bsd-2", "bsd-3", "isc", "unlicense", "0bsd")
+# SPDX-ish families, plus the spellings PyPI classifiers and free-text `license` fields use.
+# Not a full SPDX matrix: anything unmatched is `unknown`, which callers report as unresolved.
+COPYLEFT = ("agpl", "gpl", "gnu general public license", "gnu affero", "sspl", "eupl",
+            "cc-by-sa", "cc by-sa")
+WEAK_COPYLEFT = ("lgpl", "lesser general public", "library general public", "mpl", "mozilla public",
+                 "epl", "eclipse public")
+PERMISSIVE = ("mit", "apache", "bsd", "isc", "unlicense", "0bsd", "python software foundation",
+              "psf", "zlib", "cc0")
 
 _NOTICE = re.compile(
     r"(?i)(gnu\s+(?:affero\s+)?general\s+public\s+license|"
@@ -69,16 +80,28 @@ _MANIFESTS = ("package.json", "requirements.txt", "pyproject.toml", "setup.py", 
 _MANIFEST_LICENSE = re.compile(r"""(?i)["']?licen[cs]e["']?\s*[:=]\s*["']?([A-Za-z0-9.\-+ ]{2,40})""")
 
 
+_FAMILIES = [(name, re.compile(r"(?<![a-z])(?:" + "|".join(re.escape(t) for t in toks)
+                                + r")(?:v?\d[\w.+]*)?(?![a-z])"))
+             # Weak copyleft is tested FIRST: "GNU Lesser General Public License" is weak, and the
+             # broader family would otherwise report an LGPL dependency as a hard conflict.
+             for name, toks in (("weak_copyleft", WEAK_COPYLEFT), ("copyleft", COPYLEFT),
+                                ("permissive", PERMISSIVE))]
+_RANK = {"permissive": 0, "weak_copyleft": 1, "copyleft": 2, "unknown": 3}
+
+
 def classify(text: str) -> str:
-    """'copyleft' | 'weak_copyleft' | 'permissive' | 'unknown' for a licence string or notice."""
+    """'copyleft' | 'weak_copyleft' | 'permissive' | 'unknown' for a licence string or notice.
+
+    Tokens match whole words only, so "MIT" is found but "permitted" is not. A dual licence
+    ("MIT OR GPL-2.0") takes its most permissive recognised alternative — the consumer may choose.
+    """
     low = text.lower()
-    # Weak copyleft is tested FIRST: "lgpl-2.1" contains "gpl-2", so the broader family would
-    # otherwise swallow it and report an LGPL dependency as a hard conflict.
-    for fam, name in ((WEAK_COPYLEFT, "weak_copyleft"), (COPYLEFT, "copyleft"),
-                      (PERMISSIVE, "permissive")):
-        if any(tok in low for tok in fam):
-            return name
-    return "unknown"
+    # Only a short expression is split: licence prose says "express or implied".
+    alts = re.split(r"\s+or\s+", low.strip("() ")) if len(low) <= 120 else [low]
+    found = []
+    for alt in alts:
+        found.append(next((name for name, rx in _FAMILIES if rx.search(alt)), "unknown"))
+    return min(found, key=_RANK.__getitem__)
 
 
 def project_license(files: Dict[str, str]) -> Tuple[str, str]:
@@ -155,9 +178,147 @@ def scan_file(path: str, text: str, added: Iterable[int],
     return out
 
 
+# ---- dependency licence resolution (registry lookups) ----------------------------------------
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         ".cache", "licenses")      # gitignored
+CACHE_TTL = 7 * 24 * 3600
+LOOKUP_TIMEOUT = 5
+MAX_LOOKUPS = 30
+
+
+def _http_json(url: str) -> Any:
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "User-Agent": "sentinel-license-check"})
+    with urllib.request.urlopen(req, timeout=LOOKUP_TIMEOUT) as resp:
+        return json.load(resp)
+
+
+def _license_from(ecosystem: str, doc: Any) -> str:
+    """The licence string a registry document declares, '' if it declares none."""
+    if not isinstance(doc, dict):
+        return ""
+    if ecosystem == "npm":
+        lic = doc.get("license")
+        if isinstance(lic, dict):          # old packages: {"type": "MIT", "url": ...}
+            lic = lic.get("type")
+        return lic.strip() if isinstance(lic, str) else ""
+    info = doc.get("info") or {}
+    expr = (info.get("license_expression") or "").strip()
+    if expr:
+        return expr
+    # A classifier is a controlled vocabulary; the free-text `license` field is sometimes the whole
+    # licence text, so it comes last and only its first line is kept.
+    trove = [c.split("::")[-1].strip() for c in info.get("classifiers") or []
+             if c.startswith("License ::") and c.count("::") >= 2]
+    if trove:
+        return " OR ".join(trove)
+    lines = (info.get("license") or "").strip().splitlines()
+    return lines[0][:120] if lines else ""
+
+
+def _registry_url(ecosystem: str, name: str) -> str:
+    if ecosystem == "npm":
+        return f"https://registry.npmjs.org/{urllib.parse.quote(name, safe='@')}/latest"
+    return f"https://pypi.org/pypi/{urllib.parse.quote(name, safe='')}/json"
+
+
+def resolve_licenses(deps: Iterable[Tuple[str, str]], fetch: Optional[Callable[[str], Any]] = None,
+                     cache_dir: Optional[str] = None, max_lookups: int = MAX_LOOKUPS,
+                     now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Licence of each (ecosystem, name) dependency: {ecosystem, name, license, family, status, reason}.
+
+    status is `resolved` only when the licence was found AND classified; everything else is
+    `unresolved` with the reason, because "we could not tell" must never read as "clean".
+    """
+    now = time.time() if now is None else now
+    cache_dir = cache_dir or CACHE_DIR
+    online = fetch is not None or os.environ.get("SENTINEL_LICENSE_LOOKUP", "on").lower() != "off"
+    fetch = fetch or _http_json
+    budget, unreachable = max_lookups, ""
+    out: List[Dict[str, Any]] = []
+    for eco, name in dict.fromkeys(deps):          # de-duplicated, order kept
+        row: Dict[str, Any] = {"ecosystem": eco, "name": name, "license": "", "family": "unknown",
+                               "status": "unresolved", "reason": ""}
+        out.append(row)
+        path = os.path.join(cache_dir, eco, urllib.parse.quote(name, safe="") + ".json")
+        lic: Optional[str] = None
+        try:
+            if now - os.path.getmtime(path) < CACHE_TTL:
+                with open(path, encoding="utf-8") as fh:
+                    lic = json.load(fh)["license"]
+        except (OSError, ValueError, KeyError):
+            pass
+        if lic is None:
+            if not online:
+                row["reason"] = "registry lookups are off (SENTINEL_LICENSE_LOOKUP=off)"
+                continue
+            if unreachable:
+                row["reason"] = f"registry unreachable earlier in this run ({unreachable})"
+                continue
+            if budget <= 0:
+                row["reason"] = f"lookup budget of {max_lookups} per run spent"
+                continue
+            budget -= 1
+            try:
+                lic = _license_from(eco, fetch(_registry_url(eco, name)))
+            except urllib.error.HTTPError as e:
+                row["reason"] = f"registry answered HTTP {e.code}"
+                continue
+            except Exception as e:   # offline, DNS, timeout: stop paying a timeout per dependency
+                unreachable = type(e).__name__
+                row["reason"] = f"registry unreachable ({unreachable})"
+                continue
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path + ".tmp", "w", encoding="utf-8") as fh:
+                    json.dump({"license": lic}, fh)
+                os.replace(path + ".tmp", path)
+            except OSError:
+                pass                 # a cache that cannot be written costs a lookup, nothing more
+        row["license"] = lic
+        row["family"] = classify(lic) if lic else "unknown"
+        if row["family"] == "unknown":
+            row["reason"] = (f"licence {lic!r} not recognised" if lic
+                             else "the registry declares no licence")
+        else:
+            row["status"] = "resolved"
+    return out
+
+
+def dependency_findings(rows: List[Dict[str, Any]], manifest: str) -> List[Dict[str, Any]]:
+    """At most one finding per family over all resolved dependencies, capped at `medium`.
+
+    One aggregated finding — not one per package — so licence results alone can never push a run
+    out of the low risk band (risk-v1: one medium = 5 points + 0.6 health); a copyleft dependency is
+    a decision for a human, not a gate failure.
+    """
+    out = []
+    for fam, sev in (("copyleft", "medium"), ("weak_copyleft", "low")):
+        hits = [r for r in rows if r["status"] == "resolved" and r["family"] == fam]
+        if not hits:
+            continue
+        names = ", ".join(f"{r['name']} ({r['license']})" for r in hits)
+        label = fam.replace("_", " ")
+        out.append({
+            "id": f"COMP-dependency_license-{fam}",
+            "category": "dependency_license",
+            "severity": sev,
+            "file": manifest,
+            "title": f"{len(hits)} added dependenc{'y' if len(hits) == 1 else 'ies'} under a "
+                     f"{label} licence",
+            "explanation": f"Registry-declared licence (latest release): {names}. Shipping these "
+                           f"can oblige the project to release its own source under {label} terms.",
+            "fix_suggestion": _FIX["dependency_license"],
+            "source": "tool",
+        })
+    return out
+
+
 _FIX = {
     "license_conflict": "Remove the copyleft code, replace it with a permissively licensed "
                         "equivalent, or take a licence decision before merging.",
+    "dependency_license": "Confirm the licence is acceptable for how this project is distributed, "
+                          "or pick a permissively licensed alternative.",
     "pii_exposure": "Log an opaque identifier instead of the personal data, or redact the field.",
     "deprecated_api": "Move to the supported replacement.",
 }
@@ -184,6 +345,19 @@ def demo() -> None:
     assert classify("GPL-3.0-or-later") == "copyleft"
     assert classify("LGPL-2.1") == "weak_copyleft"
     assert classify("WTFPL") == "unknown"
+    assert classify("GPL v3") == "copyleft"                              # PyQt5's PyPI field
+    assert classify("GNU Lesser General Public License v3 (LGPLv3)") == "weak_copyleft"
+    assert classify("Apache Software License") == "permissive"           # a trove classifier
+    assert classify("MIT OR GPL-2.0") == "permissive"                    # dual: consumer chooses
+    assert classify("all rights reserved, use not permitted") == "unknown"   # "permit" is not MIT
+
+    import tempfile
+    rows = resolve_licenses([("pypi", "pyqt5"), ("npm", "left-pad")], cache_dir=tempfile.mkdtemp(),
+                            fetch=lambda url: {"info": {"license": "GPL v3"}} if "pypi" in url
+                            else (_ for _ in ()).throw(OSError("offline")))
+    assert [(r["family"], r["status"]) for r in rows] == [("copyleft", "resolved"),
+                                                         ("unknown", "unresolved")], rows
+    assert [f["severity"] for f in dependency_findings(rows, "requirements.txt")] == ["medium"]
 
     lic, fam = project_license({"package.json": '{"name":"x","license":"MIT"}'})
     assert (lic, fam) == ("MIT", "permissive"), (lic, fam)

@@ -67,8 +67,8 @@ def test_license_scanner_flags_pii_and_reports_its_own_limits():
     prof = _profile({"app/users.py": [(3, "log.info('signup email=%s', user.email)")]})
     out = LicenseScannerTool().invoke({}, {"run_id": "t", "change_profile": prof})
     assert [f["category"] for f in out["findings"]] == ["pii_exposure"]
-    # the tool must not imply a dependency audit it did not perform
-    assert "not resolve" in out["note"].lower() or "NOT resolved" in out["note"]
+    # the tool must not imply a dependency audit it did not perform: no deps added -> 0 of 0
+    assert out["note"].startswith("0 of 0") and out["dependency_licenses"] == []
 
 
 def test_license_scanner_flags_a_manifest_relicensing_itself():
