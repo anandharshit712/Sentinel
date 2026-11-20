@@ -402,7 +402,13 @@ class TestRunnerTool(CodedTool):
         # patterns natively (stable across Jest majors, no version-flag split needed), and a
         # `|`-joined single arg breaks on Windows — npx's .CMD shim runs through cmd.exe, and
         # Python's list2cmdline doesn't escape `|` for that inner shell, so it truncates there.
-        cmd = [npx, "--no-install", "jest", "--json", f"--outputFile={json_path}", *ids]
+        # Line coverage for the gap analysis (Phase 6), same role as pytest-cov on the Python side.
+        # `lcovonly` = just lcov.info (lib.coverage_parse reads it), without the HTML `lcov` adds.
+        # Jest only instruments files a test loads, so a module no test requires is absent from
+        # the report — "unmeasured", which lib.untested treats as never executed.
+        cov_dir = tempfile.mkdtemp(prefix="sentinel-jestcov-", dir=sandbox.scratch_dir(repo))
+        cmd = [npx, "--no-install", "jest", "--json", f"--outputFile={json_path}",
+               "--coverage", "--coverageReporters=lcovonly", f"--coverageDirectory={cov_dir}", *ids]
         start = time.perf_counter()
         try:
             sandbox.run(rid, cmd, repo, timeout, env=env)
@@ -415,6 +421,9 @@ class TestRunnerTool(CodedTool):
                                    "duration_seconds": elapsed, "timed_out": timed_out,
                                    "suite_total": suite_total, "selection_mode": selection_mode,
                                    "selected_ids": ids}
+        lcov = os.path.join(cov_dir, "lcov.info")
+        if os.path.exists(lcov) and os.path.getsize(lcov) > 0:
+            payload["coverage_report"] = lcov       # read by coverage_gap / lib.untested
         if timed_out:
             payload.update(totals=dict(_EMPTY_TOTALS), cases=[],
                            stage_failure=f"test run exceeded {timeout}s")

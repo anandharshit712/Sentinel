@@ -179,3 +179,27 @@ def test_auth_fail_closed(monkeypatch):
                      headers={"Authorization": "Bearer wrong"}).status_code == 401
         r = c.get("/api/v1/whoami", headers={"Authorization": "Bearer secret-admin-tok"})
         assert r.status_code == 200 and r.json()["role"] == "admin"
+
+
+def test_ci_run_with_untested_functions_generates_tests_after_the_gate(client, monkeypatch):
+    """Phase 6 hook: CI-sourced runs with candidates start generation AFTER `done`; manual runs and
+    runs with no candidates never call the model."""
+    c, fake = client
+    calls = []
+    monkeypatch.setattr(gw.untested, "candidates_for_run",
+                        lambda sly, ws, repo: {"candidates": [{"function": "f"}], "skipped": [], "truncated": 0})
+
+    async def fake_gen(run_id, event, sel):
+        # the gate has already finished when generation starts
+        calls.append((run_id, fake.runs[run_id]["state"]))
+    monkeypatch.setattr(gw, "_auto_generate_tests", fake_gen)
+
+    ci = dict(_EVENT, event_id="evt-ci", source="github")
+    rid = c.post("/api/v1/simulate", json={"event": ci, "repo_workspace": "/tmp"}).json()["run_id"]
+    assert _wait_done(c, rid) == "done"
+    man = dict(_EVENT, event_id="evt-manual", source="manual")
+    rid2 = c.post("/api/v1/simulate", json={"event": man, "repo_workspace": "/tmp"}).json()["run_id"]
+    assert _wait_done(c, rid2) == "done"
+    time.sleep(0.2)
+    assert calls == [(rid, "done")]
+    assert any(a["action"] == "tests_auto_generation_started" and a["run_id"] == rid for a in fake.audit)

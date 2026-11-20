@@ -262,7 +262,60 @@ host-native Gateway:
 
 ## 7. Phase 6 — Test generation in CI
 
-_Filled in when the phase closes._
+**The rule** (`lib/untested.py`, deterministic). A changed function or method in a non-test `.py`
+or JS/TS file becomes a generation candidate only if all three are false:
+
+- (a) any body line ran under coverage (partial coverage counts as covered: extend the test that
+  already reaches it);
+- (c) a test file changed in this PR references the name;
+- (b) an existing test imports its module (Python dotted-suffix match, JS relative-import
+  resolution) and uses the name as an identifier, found with `ast` or tree-sitter. Comments and
+  strings do not count.
+
+Every skipped function records why. Candidates are ranked sensitive → new → size and capped by
+`max_generated_per_pr` (default 3); `truncated` says how many were cut. *Unmeasured* counts as
+never executed: Jest instruments only the files the tests load, so a brand-new untested module is
+simply absent from lcov. No candidates → no model call and nothing posted.
+
+**When it runs.** For CI-sourced runs only, the Gateway runs `sentinel_testgen` *after* the decision
+is persisted and published. It is a background task on a fresh clone, in the run's own sandbox,
+with the run's own BYOK key, so it can never delay or alter the gate. Generation is one network
+call per candidate, with one retry. `GET /api/v1/ci/runs/{id}` reports `test_generation`
+(`pending` / `running` / `done` / `none`) and the proposals.
+
+The GitHub and GitLab templates have a second, advisory step (`continue-on-error` /
+`allow_failure`). It waits for generation and posts the accepted tests as their own comment or
+note. Each comment is updated in place, found by its marker, so the gate comment and the tests
+comment never overwrite each other. Nothing is ever committed.
+
+**JS/TS path.**
+
+- Jest runs with `--coverage --coverageReporters=lcovonly`. `gap_context` is language-aware:
+  module path, framework, `*.test.*` examples.
+- `test_author` writes pytest or Jest accordingly.
+- `lib/evaluate` JS mode:
+  1. Reject a test with no assertions.
+  2. Require a pass on the unmodified code.
+  3. Run **Stryker 10.1.1** (`@stryker-mutator/core` + `jest-runner`) with `mutate: file:start-end`
+     and `testMatch` limited to the proposed test.
+  4. Score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage). CompileError and
+     RuntimeError mutants are excluded.
+- Stryker is installed with `npm install --no-save --ignore-scripts` in the sandbox install phase
+  (network on), so package.json and the lockfile are untouched and no lifecycle script runs. It
+  needs Node ≥ 22, so the sandbox image moved to Node 22.
+- The differential tier gained a Node runner. The blind oracle uses JSDoc as the stated intent and
+  removes the body. `spec_check` stays Python-only and says `checked: false`.
+- Measured on the sample: about 28 s to install, 11–15 s per Stryker evaluation.
+
+**Verified by:**
+
+- `tests/coded_tools/test_p6.py` (34 tests): all three conditions in both languages, the
+  PR-added-test case, the cap, zero calls with no candidates, and the JS plumbing.
+- `verify_p6_js.py` 4/4 on `samples/node-catalog-service`: the proposal was accepted with a Stryker
+  score of 1.00 (11/11 killed), the repo's git status stayed clean, and a PR whose changed
+  functions are all covered → zero candidates, zero model calls.
+- `verify_p3` 3/3, every trial 1.00.
+- A Gateway test: CI runs start generation after `done`; manual runs never do.
 
 ## 8. Phase 7 — Remaining agreed items
 

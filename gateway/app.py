@@ -38,7 +38,7 @@ from gateway import auth, settings
 
 logger = logging.getLogger("gateway")
 from gateway.invoker.neuro_san_client import invoke_network
-from lib import calibration, sandbox, secretbox, workspace
+from lib import calibration, sandbox, secretbox, untested, workspace
 from lib.redact import redact
 
 app = FastAPI(title="Sentinel Delivery Gateway", version="1")
@@ -385,6 +385,18 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
         dao.set_run_state(run_id, "done", finished=True)
         bus.publish(run_id, {"kind": "state_change", "state": "done",
                              "decision": decision, "structure": structure})
+        # Test generation for CI runs (12 §7): only for changed functions no test reaches, and
+        # only AFTER the decision is persisted and published — it can never delay or alter the gate.
+        if event.get("source") != "manual":
+            sel = await asyncio.to_thread(untested.candidates_for_run, sly, ws,
+                                          (event.get("repo") or {}).get("name"))
+            if sel["candidates"]:            # none -> no model call, nothing posted
+                dao.record_audit(run_id, actor="gateway", action="tests_auto_generation_started",
+                                 payload={"candidates": len(sel["candidates"]),
+                                          "truncated": sel.get("truncated", 0)})
+                t = asyncio.create_task(_auto_generate_tests(run_id, event, sel))
+                _TASKS.add(t)
+                t.add_done_callback(_TASKS.discard)
     except asyncio.CancelledError:  # operator hit Stop — mark failed (re-runnable), then propagate.
         # The invoke_network worker thread can't be interrupted, but the run is finalized here so
         # the UI leaves "running" immediately; the orphaned thread's result is ignored on return.
@@ -405,6 +417,38 @@ async def _run_pipeline(run_id: str, event: dict, ws_override: str | None) -> No
             logger.warning("run %s: sandbox teardown failed: %s", run_id, e)
         if not ws_override:
             workspace.cleanup_workspace(run_id)
+
+
+async def _auto_generate_tests(run_id: str, event: dict, sel: dict) -> None:
+    """Write tests for the selected untested functions on a fresh clone, in the run's own sandbox.
+    Runs after the gate's own sandbox is torn down (same run_id: the coded tools only see that)."""
+    ws = None
+    try:
+        llm = _llm_config_for_run(run_id)
+        ws = await asyncio.to_thread(_clone, event, f"{run_id}-testgen")
+        await asyncio.to_thread(sandbox.open_run, run_id, ws, (event.get("repo") or {}).get("name"))
+
+        def call(extra: dict) -> None:
+            invoke_network(run_id, event, ws, host=settings.NEURO_SAN_HOST, port=settings.NEURO_SAN_PORT,
+                           network="sentinel_testgen", prompt=untested.PROMPT,
+                           extra_sly={**extra, **({"llm_config": llm} if llm else {})})
+
+        out = await asyncio.to_thread(untested.generate, sel, call)
+        dao.record_audit(run_id, actor="gateway", action="tests_auto_generated",
+                         payload={"attempted": out.get("attempted"), "truncated": out.get("truncated"),
+                                  "skipped": len(sel.get("skipped") or []),
+                                  "proposals": len(dao.list_test_proposals(run_id))})
+    except Exception as e:   # advisory: a failure here is logged, never surfaced as a gate failure
+        logger.warning("run %s: auto test generation failed: %s", run_id, e)
+        dao.record_audit(run_id, actor="gateway", action="tests_auto_generated",
+                         payload={"error": redact(str(e))[:300]})
+    finally:
+        try:
+            sandbox.close_run(run_id)
+        except Exception as e:
+            logger.warning("run %s: sandbox teardown failed: %s", run_id, e)
+        if ws:
+            workspace.cleanup_workspace(f"{run_id}-testgen")
 
 
 def _dir_mb(path: str) -> float:
@@ -740,6 +784,7 @@ async def generate_tests(run_id: str, _role: str = Depends(_require("approver"))
         # One retry: generation is advisory, and the provider returns intermittent 500s that kill
         # a run mid-loop (see docs/model-evaluation.md §8). Retrying a non-gating flow is cheap;
         # retrying the promotion chain would not be.
+        llm = _llm_config_for_run(run_id)
         for attempt in (1, 2):
             try:
                 await asyncio.to_thread(
@@ -747,7 +792,8 @@ async def generate_tests(run_id: str, _role: str = Depends(_require("approver"))
                     host=settings.NEURO_SAN_HOST, port=settings.NEURO_SAN_PORT,
                     network="sentinel_testgen",
                     prompt="Write a test for the highest-priority coverage gap in this run.",
-                    extra_sly={"coverage_gaps": gaps})   # gap_context reads the workspace for the rest
+                    # gap_context reads the workspace for the rest
+                    extra_sly={"coverage_gaps": gaps, **({"llm_config": llm} if llm else {})})
                 last_error = None
                 break
             except Exception as e:
@@ -1108,7 +1154,16 @@ def ci_run_status(run_id: str, request: Request) -> dict:
     if not run or run.get("repo_id") != repo["id"]:
         raise HTTPException(404, "run not found")
     report = (dao.get_payload("review_reports", run_id) or {}).get("payload") or {}
+    actions = {a["action"] for a in dao.list_audit(run_id)}
+    gen = ("done" if "tests_auto_generated" in actions
+           else "running" if "tests_auto_generation_started" in actions
+           else "none" if run["state"] in ("done", "failed") else "pending")
+    proposals = [{k: p.get(k) for k in ("target_file", "target_function", "test_path", "verdict",
+                                       "mutation_score", "test_source")}
+                 | {"classification": (p.get("evaluation") or {}).get("classification")}
+                 for p in dao.list_test_proposals(run_id)]
     return {"run_id": run_id, "state": run["state"], "decision": dao.get_decision(run_id),
+            "test_generation": gen, "test_proposals": proposals,
             "review": {k: report.get(k) for k in ("pr_health_score", "recommendation", "counts",
                                                   "executive_summary")},
             "url": f"{auth.PUBLIC_URL}/runs/{run_id}"}

@@ -146,6 +146,56 @@ def collect(source: str, function: str, event: Optional[Dict[str, Any]] = None,
     }
 
 
+def collect_js(source: str, function: str, target_file: str,
+               event: Optional[Dict[str, Any]] = None,
+               other_sources: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """`collect` for a JS/TS function (Phase 6): the JSDoc block stands in for the docstring.
+
+    Line-based redaction over the tree-sitter span: the signature line and the closing line stay,
+    every line between becomes a comment. Returns None when the body could not be removed (the
+    function is not found, or its body shares a line with the signature) — the caller must refuse
+    rather than show the implementation.
+    """
+    from lib import jsexec                      # local: jsexec pulls in tree-sitter
+    span = jsexec.function_span(source, target_file, function)
+    if not span:
+        return None
+    start, end = span
+    lines = source.splitlines()
+    if end <= start + 1:
+        return None                             # one- or two-line function: no clean cut
+    body = "\n".join(lines[start:end - 1]).strip()
+    redacted = "\n".join(lines[:start] + ["  /* body removed */"] + lines[end - 1:])
+    if body and body in redacted:
+        return None
+    sig = re.split(r"\{\s*$|=>", lines[start - 1].strip(), maxsplit=1)[0].strip()
+
+    doc = None                                  # the /** ... */ block right above the def
+    i = start - 2
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    if i >= 0 and lines[i].strip().endswith("*/"):
+        j = i
+        while j >= 0 and "/*" not in lines[j]:
+            j -= 1
+        if j >= 0:
+            raw = "\n".join(lines[j:i + 1])
+            doc = "\n".join(re.sub(r"^\s*(/\*\*?|\*/|\*)\s?", "", ln).replace("*/", "").rstrip()
+                            for ln in raw.splitlines()).strip() or None
+    change = ((event or {}).get("change") or {})
+    return {
+        "signature": sig,
+        "docstring": doc,
+        "documented_numbers": documented_numbers(doc),
+        "module_without_body": redacted,
+        "pr_title": change.get("title"),
+        "pr_description": change.get("description"),
+        "call_sites": call_sites(other_sources or {}, function.rsplit(".", 1)[-1]),
+        "has_stated_intent": is_substantive(doc, change.get("description")),
+        "language": "javascript",
+    }
+
+
 def demo() -> None:
     src = ('CAP = 500\n\n\n'
            'def loyalty_discount(total: float, years: int) -> float:\n'
@@ -186,6 +236,20 @@ def demo() -> None:
     bare = collect("def f(x):\n    return x * 3\n", "f")
     assert bare["has_stated_intent"] is False
     assert bare["documented_numbers"]["percentages"] == []
+
+    # JS/TS: the JSDoc is the intent, the body is gone
+    js = ("const CAP = 500;\n\n"
+          "/**\n * Orders of more than 10 units get 10% off the unit price.\n */\n"
+          "function bulkPrice(qty, unit) {\n  if (qty > 10) {\n    return qty * unit * 0.9;\n  }\n"
+          "  return qty * unit;\n}\n\nmodule.exports = { bulkPrice };\n")
+    jctx = collect_js(js, "bulkPrice", "src/pricing.js")
+    assert jctx and jctx["has_stated_intent"] is True, jctx
+    assert "10% off" in jctx["docstring"] and "*" not in jctx["docstring"], jctx["docstring"]
+    assert jctx["signature"] == "function bulkPrice(qty, unit)", jctx["signature"]
+    red_js = jctx["module_without_body"]
+    assert "0.9" not in red_js and "qty > 10" not in red_js, red_js
+    assert "CAP = 500" in red_js and "module.exports" in red_js
+    assert collect_js("const f = (x) => x * 3;\n", "f", "a.js") is None, "no clean cut -> refuse"
 
     print("lib/intent.py OK")
 

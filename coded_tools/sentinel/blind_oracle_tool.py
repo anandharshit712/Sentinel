@@ -18,6 +18,9 @@ it states an expectation, and code checks it.
 
 A disagreement means the implementation and the stated intent differ — not which one is wrong. The
 docstring may be stale. That call belongs to a human.
+
+JS/TS (Phase 6): the JSDoc block is the stated intent (`lib.intent.collect_js`), and the comparison
+runs the real function in Node — a `.cjs` probe that `require`s the module.
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ from typing import Any, Dict, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
 from lib import intent as intent_mod
-from lib import sandbox
+from lib import jsexec, sandbox
 from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("coded_tools.blind_oracle")
@@ -89,12 +92,14 @@ class BlindOracleTool(CodedTool):
     # ---------------------------------------------------------------- intent side
     def _context(self, source: str, function: str, sly_data: Dict[str, Any],
                  repo: str, target_file: str) -> Union[Dict[str, Any], str]:
+        js = jsexec.is_js(target_file)
+        exts = (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs") if js else (".py",)
         others: Dict[str, str] = {}
         for root, dirs, files in os.walk(repo):
             dirs[:] = [d for d in dirs if d not in
                        {".git", "node_modules", ".venv", "__pycache__", ".pytest_cache"}]
             for name in files:
-                if not name.endswith(".py"):
+                if not name.endswith(exts):
                     continue
                 rel = os.path.relpath(os.path.join(root, name), repo).replace(os.sep, "/")
                 if rel != target_file:
@@ -107,13 +112,19 @@ class BlindOracleTool(CodedTool):
             if len(others) >= 20:
                 break
 
-        ctx = intent_mod.collect(source, function, sly_data.get("event"), others)
+        if js:
+            ctx = intent_mod.collect_js(source, function, target_file, sly_data.get("event"), others)
+            if ctx is None:     # collect_js checks its own redaction and returns None if it failed
+                return ("Error: could not separate the body of this function from its signature — "
+                        "refusing to show the implementation to the blind oracle")
+        else:
+            ctx = intent_mod.collect(source, function, sly_data.get("event"), others)
 
         # The guard. If redaction failed, this tier is worthless while still looking confident —
         # refuse rather than hand the implementation to the model.
         redacted = ctx.get("module_without_body") or ""
         tail = source.split(f"def {function}", 1)[-1][:200]
-        if redacted and tail and tail in redacted:
+        if not js and redacted and tail and tail in redacted:
             return ("Error: redaction failed — refusing to show the implementation to the blind "
                     "oracle, because an oracle that has seen the code only restates it")
 
@@ -137,6 +148,8 @@ class BlindOracleTool(CodedTool):
             return {"checked": 0, "agreements": [], "disagreements": [],
                     "reason": "no usable expected cases were supplied"}
 
+        if jsexec.is_js(target_file):
+            return self._compare_js(repo, target_file, function, cases, run_id)
         module = target_file[:-3].replace("/", ".") if target_file.endswith(".py") else target_file
         # A probe script in a subprocess with a timeout, not an in-process import: this is
         # repository code, and it gets the same treatment as the test runner gives it.
@@ -173,6 +186,59 @@ class BlindOracleTool(CodedTool):
             except OSError:
                 pass
 
+        return self._judge(cases, actuals, function, run_id)
+
+    _NODE_PROBE = "\n".join([
+        "const m = require(process.argv[2]);",
+        "const name = process.argv[3];",
+        "const short = name.split('.').pop();",
+        "const pick = (o) => o && (typeof o[short] === 'function' ? o[short] : null);",
+        "const f = (typeof m === 'function' && m.name === short) ? m",
+        "  : pick(m) || pick(m && m.default) || (m && typeof m.default === 'function' ? m.default : null);",
+        "if (!f) { console.error(`${name} is not exported`); process.exit(2); }",
+        "(async () => {",
+        "  const out = [];",
+        "  for (const c of JSON.parse(process.argv[4])) {",
+        "    try { let v = f(...(c.args || [])); if (v && typeof v.then === 'function') v = await v;",
+        "          out.push({ actual: v === undefined ? null : v }); }",
+        "    catch (e) { out.push({ actual: `${e && e.name}: ${e && e.message}` }); }",
+        "  }",
+        "  console.log(JSON.stringify(out));",
+        "})();",
+        "",
+    ])
+
+    def _compare_js(self, repo: str, target_file: str, function: str, cases: list,
+                    run_id: str) -> Dict[str, Any]:
+        """The Node runner: require the module, call the export, print JSON. Same contract as the
+        Python probe — a subprocess through the sandbox, with a timeout."""
+        node = sandbox.which("node")
+        if not node:
+            return {"checked": 0, "agreements": [], "disagreements": [],
+                    "reason": "node is not available, so the function cannot be called"}
+        fd, path = tempfile.mkstemp(suffix=".cjs", prefix="sentinel_probe_", dir=repo)
+        os.close(fd)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._NODE_PROBE)
+            module = os.path.join(repo, target_file.replace("/", os.sep))
+            r = sandbox.run(run_id, [node, os.path.basename(path), module, function,
+                                     json.dumps(cases)], repo, PROBE_TIMEOUT)
+            if r.returncode != 0:
+                return {"checked": 0, "agreements": [], "disagreements": [],
+                        "reason": f"could not call {function}: {(r.stderr or '')[-200:]}"}
+            actuals = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception as e:
+            return {"checked": 0, "agreements": [], "disagreements": [],
+                    "reason": f"probe failed: {e}"}
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return self._judge(cases, actuals, function, run_id)
+
+    def _judge(self, cases: list, actuals: list, function: str, run_id: str) -> Dict[str, Any]:
         agreements, disagreements = [], []
         for case, got in zip(cases, actuals):
             expected, actual = case.get("expected"), got.get("actual")
@@ -244,6 +310,26 @@ def demo() -> None:
         fh.write("def f(x):\n    return x * 3\n")
     bare = tool.invoke({"target_file": "bare.py", "function": "f", "repo_workspace": ws}, {})
     assert bare["has_stated_intent"] is False, bare
+
+    # JS: the JSDoc reaches the oracle, the body does not, and Node runs the real function
+    with open(os.path.join(ws, "pricing.js"), "w", encoding="utf-8") as fh:
+        fh.write("/**\n * Orders of more than 10 units get 15% off the total price.\n */\n"
+                 "function bulkPrice(qty, unit) {\n  if (qty > 10) {\n"
+                 "    return Math.round(qty * unit * 0.9 * 100) / 100;\n  }\n"
+                 "  return qty * unit;\n}\n\nmodule.exports = { bulkPrice };\n")
+    jctx = tool.invoke({"target_file": "pricing.js", "function": "bulkPrice",
+                        "repo_workspace": ws}, {})
+    assert jctx["has_stated_intent"] is True and "15%" in jctx["docstring"], jctx
+    assert "0.9" not in jctx["module_without_body"], "the body must never reach the oracle"
+    if sandbox.which("node"):
+        jres = tool.invoke({"target_file": "pricing.js", "function": "bulkPrice",
+                            "repo_workspace": ws,
+                            "expectations": [{"args": [11, 10], "expected": 93.5},
+                                             {"args": [2, 5], "expected": 10}]}, {})
+        assert jres["verdict"] == "disputed", jres
+        assert jres["disagreements"][0]["actual"] == 99, jres
+        assert len(jres["agreements"]) == 1, jres
+        assert not [f for f in os.listdir(ws) if f.startswith("sentinel_probe_")], "probe removed"
 
     shutil.rmtree(ws, ignore_errors=True)
     print("blind_oracle_tool OK")

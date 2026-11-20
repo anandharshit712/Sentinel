@@ -37,6 +37,10 @@ def _norm(path: str, root: str | None = None) -> str:
         r = root.replace("\\", "/").rstrip("/")
         if p.lower().startswith(r.lower() + "/"):
             p = p[len(r) + 1:]
+        elif p.startswith("/work/"):
+            # Jest's lcov writes absolute paths; inside the sandbox those are container paths
+            # (lib.sandbox mounts the workspace at /work), so the host root never matches.
+            p = p[len("/work/"):]
     p = re.sub(r"^\./", "", p)
     return p.lstrip("/")
 
@@ -179,6 +183,7 @@ def demo() -> None:
     assert _norm("app\\orders.py") == "app/orders.py"
     assert _norm("./app/orders.py") == "app/orders.py"
     assert _norm("C:/ws/app/orders.py", "C:/ws") == "app/orders.py"
+    assert _norm("/work/src/cart.js", "C:/ws") == "src/cart.js", "sandbox paths map to the repo"
 
     assert summarise(m) == {"files": 1, "lines": 5, "covered": 3, "line_pct": 60.0}, summarise(m)
 

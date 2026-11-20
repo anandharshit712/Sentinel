@@ -15,6 +15,9 @@ defaults: &defaults
   review_budget_lines: 800       # per-reviewer LLM snippet budget (hotspot lines / shard)
   max_review_shards: 4           # ceiling on parallel security_reviewer_* agents
   exclude_globs: []              # extra vendored/generated exclusions on top of lib/triage built-ins
+  # Test generation in CI (lib/untested): at most this many untested changed functions per PR
+  # get a generated test. 0 turns CI generation off for the repo.
+  max_generated_per_pr: 3
 
 repos:
   python-payments-service:

@@ -9,6 +9,9 @@ The existing tests matter as much as the gap. A generated test that ignores the 
 import style and naming conventions is one a reviewer has to rewrite before adopting, which defeats
 the point. Style is shown, not described.
 
+Language-aware (Phase 6): for a JS/TS target it names Jest as the framework, shows the project's
+`*.test.*` / `*.spec.*` files, and gives the require path relative to where the test will sit.
+
 Read-only: it opens files in the run workspace and writes nothing anywhere.
 """
 from __future__ import annotations
@@ -18,6 +21,8 @@ import os
 from typing import Any, Dict, List, Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
+from lib import jsexec
+from lib.evaluate import DEFAULT_TEST_PATH
 
 logger = logging.getLogger("coded_tools.gap_context")
 
@@ -25,14 +30,20 @@ MAX_EXAMPLE_CHARS = 2500     # two example tests, trimmed — style needs a samp
 MAX_SOURCE_CHARS = 6000
 
 
-def _find_example_tests(repo: str, limit: int = 2) -> List[Dict[str, str]]:
+def _is_example(name: str, js: bool) -> bool:
+    if js:
+        return bool(jsexec.TEST_RE.search(name)) and "sentinel.generated" not in name
+    return name.startswith("test_") and name.endswith(".py") or name.endswith("_test.py")
+
+
+def _find_example_tests(repo: str, limit: int = 2, js: bool = False) -> List[Dict[str, str]]:
     """A couple of the project's own test files, smallest first — small ones read as templates."""
     found: List[tuple[int, str]] = []
     for root, dirs, files in os.walk(repo):
         dirs[:] = [d for d in dirs if d not in
                    {".git", "node_modules", ".venv", "__pycache__", ".pytest_cache", "dist"}]
         for name in files:
-            if name.startswith("test_") and name.endswith(".py") or name.endswith("_test.py"):
+            if _is_example(name, js):
                 path = os.path.join(root, name)
                 try:
                     found.append((os.path.getsize(path), path))
@@ -86,8 +97,15 @@ class GapContextTool(CodedTool):
             uncovered_src = [{"line": ln, "code": lines[ln - 1]}
                              for ln in uncovered if 1 <= ln <= len(lines)]
 
-            # The import path a test would use, derived from the file path.
-            module = gap["file"][:-3].replace("/", ".") if gap["file"].endswith(".py") else gap["file"]
+            # The import path a test would use, derived from the file path. For JS it is relative
+            # to where the test will sit, so the agent must pass that test_path on unchanged.
+            js = jsexec.is_js(gap["file"])
+            if js:
+                test_path = jsexec.default_test_path(repo, gap["file"])
+                module = jsexec.import_path(test_path, gap["file"])
+            else:
+                test_path = DEFAULT_TEST_PATH
+                module = gap["file"][:-3].replace("/", ".") if gap["file"].endswith(".py") else gap["file"]
 
             logger.info("run %s: gap_context -> %s::%s (%d uncovered line(s))",
                         run_id, gap["file"], gap.get("function"), len(uncovered))
@@ -95,10 +113,13 @@ class GapContextTool(CodedTool):
                 "gap": {"file": gap["file"], "function": gap.get("function"),
                         "status": gap.get("status"), "line_start": start, "line_end": end,
                         "priority": gap.get("priority"), "sensitive": gap.get("sensitive")},
+                "language": "javascript" if js else "python",
+                "framework": "jest" if js else "pytest",
+                "test_path": test_path,
                 "module_path": module,
                 "function_source": source,
                 "uncovered_lines": uncovered_src,
-                "example_tests": _find_example_tests(repo),
+                "example_tests": _find_example_tests(repo, js=js),
                 "gaps_remaining": len(gaps) - index - 1,
             }
         except Exception as e:
@@ -130,6 +151,22 @@ def demo() -> None:
     assert out["uncovered_lines"] == [{"line": 3, "code": "        return qty * unit * 0.9"}], out
     assert out["module_path"] == "shop"
     assert out["example_tests"] and "test_plain" in out["example_tests"][0]["source"]
+
+    assert out["framework"] == "pytest" and out["test_path"] == DEFAULT_TEST_PATH
+
+    # JS: Jest, a require path relative to the test's location, and the project's *.test.js files
+    os.makedirs(os.path.join(ws, "src", "catalog"))
+    with open(os.path.join(ws, "src", "catalog", "pricing.js"), "w", encoding="utf-8") as fh:
+        fh.write("function bulkPrice(q, u) {\n  return q * u;\n}\nmodule.exports = { bulkPrice };\n")
+    with open(os.path.join(ws, "tests", "cart.test.js"), "w", encoding="utf-8") as fh:
+        fh.write("test('x', () => expect(1 + 1).toBe(2));\n")
+    js = GapContextTool().invoke({}, {"run_id": "d", "repo_workspace": ws, "coverage_gaps": {
+        "measured": True, "gaps": [{"file": "src/catalog/pricing.js", "function": "bulkPrice",
+                                    "status": "unmeasured", "line_start": 1, "line_end": 3}]}})
+    assert js["framework"] == "jest" and js["language"] == "javascript", js
+    assert js["test_path"] == "tests/sentinel.generated.test.js", js
+    assert js["module_path"] == "../src/catalog/pricing", js
+    assert [e["path"] for e in js["example_tests"]] == ["tests/cart.test.js"], js["example_tests"]
 
     # covered-only and unmeasured runs say so rather than inventing a target
     assert GapContextTool().invoke({}, {"run_id": "d", "repo_workspace": ws,

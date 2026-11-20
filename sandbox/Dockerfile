@@ -3,7 +3,7 @@
 # amd64 + arm64, and nothing here downloads an arch-specific binary.
 #
 #   docker build -t sentinel-sandbox:latest sandbox/
-FROM node:20-bookworm-slim AS node
+FROM node:22-bookworm-slim AS node
 
 FROM python:3.12-slim-bookworm
 COPY --from=node /usr/local/bin/node /usr/local/bin/node

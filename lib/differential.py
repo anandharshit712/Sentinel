@@ -18,7 +18,9 @@ Nothing here is a judgement about whether the change was right — only about wh
 comes from Tier 2 (11 §3); this tier is pure observation.
 
 Implementation note: a `git worktree` of the base commit, not a checkout, so the run workspace is
-never mutated and a concurrent run cannot see a half-switched tree.
+never mutated and a concurrent run cannot see a half-switched tree. A Jest test (Phase 6) runs the
+same way through `lib.jsexec`, with the workspace's node_modules linked into the worktree: the base
+side is tested with head's dependencies, which is the comparison that isolates the code change.
 
     python -m lib.differential        # self-check (needs git)
 """
@@ -26,13 +28,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from typing import Any, Dict, Optional
 
-from lib import sandbox
+from lib import jsexec, sandbox
 from lib.pyexec import fresh_import_env
 
 logger = logging.getLogger("lib.differential")
@@ -55,6 +58,8 @@ def _git(repo: str, *args: str, timeout: int = 60) -> subprocess.CompletedProces
 def _run_test(cwd: str, test_rel: str, timeout: int = PER_RUN_TIMEOUT,
               run_id: Optional[str] = None) -> tuple[bool, str]:
     """(passed, tail). A timeout counts as not passing — an unbounded test is not evidence."""
+    if jsexec.is_js(test_rel):
+        return jsexec.run_jest(run_id, cwd, test_rel, timeout)
     cmd = [sys.executable, "-m", "pytest", test_rel, "-q", "-p", "no:cacheprovider", "-x",
            "--no-header"]
     try:
@@ -70,6 +75,12 @@ def base_has_target(repo: str, base_sha: str, target_file: str, function: str) -
     if r.returncode != 0:
         return False                      # the file itself is new
     src = r.stdout
+    name = re.escape(function.rsplit(".", 1)[-1])
+    if jsexec.is_js(target_file):
+        # function f(, const f = (...) =>, f: function(, and a class method `f(...) {`
+        return re.search(rf"\bfunction\s*\*?\s*{name}\b|\b{name}\s*[:=]\s*(?:async\b\s*)?"
+                         rf"(?:function\b|\(|\w+\s*=>)|^\s*(?:async\s+)?{name}\s*\(",
+                         src, re.M) is not None
     return (f"def {function}" in src) or (f"function {function}" in src)
 
 
@@ -106,6 +117,8 @@ def compare(repo: str, base_sha: str, target_file: str, function: str, test_path
             evidence["reason"] = f"could not create a base worktree: {add.stderr.strip()[:200]}"
             return evidence
 
+        if jsexec.is_js(test_path):
+            jsexec.attach_node_modules(repo, tree)
         abs_test = os.path.join(tree, test_path.replace("/", os.sep))
         os.makedirs(os.path.dirname(abs_test), exist_ok=True)
         with open(abs_test, "w", encoding="utf-8") as fh:
@@ -130,6 +143,7 @@ def compare(repo: str, base_sha: str, target_file: str, function: str, test_path
         evidence["reason"] = f"comparison failed: {e}"
         return evidence
     finally:
+        jsexec.detach_node_modules(tree)      # before the remove, which must not follow the link
         _git(repo, "worktree", "remove", "--force", tree)
         shutil.rmtree(work, ignore_errors=True)
 
@@ -183,6 +197,18 @@ def demo() -> None:
     # 4. an unusable base is reported, never guessed
     assert compare(ws, "", "shop.py", "price", "t.py", "x")["result"] == UNKNOWN
     assert compare(ws, "0" * 40, "shop.py", "price", "t.py", "x")["result"] == UNKNOWN
+
+    # JS: the declaration forms a base file can hold
+    assert base_has_target(ws, base, "shop.py", "price")
+    sh_src = ("const a = (x) => x;\nexports.b = function (y) {};\nclass K {\n  async c(z) {}\n}\n"
+              "function* d() {}\nconst e = async x => x;\n")
+    w("lib.js", sh_src)
+    sh("add", "-A")
+    sh("commit", "-qm", "js")
+    js_rev = _git(ws, "rev-parse", "HEAD").stdout.strip()
+    for fn in ("a", "b", "K.c", "d", "e"):
+        assert base_has_target(ws, js_rev, "lib.js", fn), fn
+    assert not base_has_target(ws, js_rev, "lib.js", "zz")
 
     # 5. the run workspace is untouched: no stray test file, no worktree left behind
     assert not os.path.exists(os.path.join(ws, "tests", "t_price.py"))

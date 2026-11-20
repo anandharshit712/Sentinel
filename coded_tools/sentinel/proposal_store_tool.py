@@ -25,7 +25,7 @@ class ProposalStoreTool(CodedTool):
             target_file = args.get("target_file")
             function = args.get("function")
             test_source = args.get("test_source")
-            test_path = args.get("test_path") or "tests/test_sentinel_generated.py"
+            test_path = args.get("test_path")      # None: lib.evaluate picks per language
             if not (run_id and target_file and function and test_source):
                 return "Error: run_id, target_file, function and test_source are required"
 
@@ -38,6 +38,8 @@ class ProposalStoreTool(CodedTool):
                 sly_data)
             if isinstance(evaluation, str):
                 return f"Error: evaluation failed: {evaluation}"
+            # The path the test actually ran at (a JS test must be a *.test.* file Jest will see).
+            test_path = evaluation.get("test_path") or test_path or "tests/test_sentinel_generated.py"
 
             # Tier 2's verdict, from the agent that never saw the function body. A dispute
             # outranks any mutation score: a test written against code that contradicts its own

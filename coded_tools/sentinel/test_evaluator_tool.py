@@ -41,7 +41,7 @@ class TestEvaluatorTool(CodedTool):
             base_sha = (args.get("base_sha")
                         or ((sly_data.get("event") or {}).get("change") or {}).get("base_sha"))
             return evaluate(workspace, target_file, function, test_source,
-                            test_path=args.get("test_path") or DEFAULT_TEST_PATH,
+                            test_path=args.get("test_path"),   # None: per-language default
                             base_sha=base_sha,
                             min_score=float(args.get("min_score", DEFAULT_MIN_SCORE)),
                             run_id=sly_data.get("run_id"))

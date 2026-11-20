@@ -118,7 +118,7 @@ def _generate(sly, host, port):
 
 def main(argv) -> int:
     trials = int(argv[1]) if len(argv) > 1 else 1
-    host, port = "localhost", 8080
+    host, port = "localhost", int(os.environ.get("NEURO_SAN_PORT", "8080"))
     passes = 0
     for i in range(trials):
         # Unique per EXECUTION, not per trial index: a deterministic id made trial 1 read the

@@ -193,6 +193,23 @@ def file_metrics(path: str, src: str) -> Dict[str, List[int]]:
     return out
 
 
+def identifiers(path: str, src: str) -> List[str]:
+    """Every identifier the code USES (variables, properties, shorthand props) — never comments or
+    string contents. Lets a caller ask "does this test mention `addItem`?" without a regex that a
+    comment or a string literal would satisfy (Phase 6, lib/untested)."""
+    grammar = grammar_for_path(path)
+    if not grammar or not src or _unsafe_to_parse(src):
+        return []
+    tree, data = _parse(grammar, src)
+    out, stack = set(), [tree.root_node]
+    while stack:
+        n = stack.pop()
+        if n.type.endswith("identifier"):
+            out.add(_text(data, n))
+        stack.extend(n.children)
+    return sorted(out)
+
+
 # --- subprocess isolation -------------------------------------------------------------------------
 # tree-sitter's native parse/query state leaks CUMULATIVELY: each call is fine, but enough of them
 # in one long-lived process (the neuro-san server) eventually SEGFAULTs (exit 139), killing every
@@ -204,7 +221,8 @@ import json as _json  # noqa: E402
 import subprocess as _subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
 
-_BATCH = {"defs": lambda p, s: extract_defs(p, s), "metrics": lambda p, s: file_metrics(p, s)}
+_BATCH = {"defs": lambda p, s: extract_defs(p, s), "metrics": lambda p, s: file_metrics(p, s),
+          "idents": lambda p, s: identifiers(p, s)}
 
 
 def _run_batch(mode: str, items: List[List[str]]) -> list:
@@ -213,7 +231,7 @@ def _run_batch(mode: str, items: List[List[str]]) -> list:
 
 
 def batch_isolated(mode: str, items: List[List[str]], chunk: int = 1) -> list:
-    """Parse many [path, src] pairs in throwaway subprocess(es). mode: 'defs' | 'metrics'.
+    """Parse many [path, src] pairs in throwaway subprocess(es). mode: 'defs' | 'metrics' | 'idents'.
     Returns results aligned to `items`; on ANY failure (incl. a child segfault) that chunk degrades
     to empties — never propagates a crash to the caller.
 
@@ -223,7 +241,7 @@ def batch_isolated(mode: str, items: List[List[str]], chunk: int = 1) -> list:
     ponytail: chunk=1 spends ~1 process spawn per changed file. Raise it only with a measured safe
     ceiling — a chunk that crashes loses ALL its files' results, not just the offending one.
     """
-    empty: Any = [] if mode == "defs" else {}
+    empty: Any = {} if mode == "metrics" else []
     results: list = [empty for _ in items]
     todo = [(i, it) for i, it in enumerate(items) if it and it[1]]  # skip empty sources
     for c in range(0, len(todo), chunk):
@@ -267,6 +285,10 @@ class Bar {
     # subprocess isolation: batch round-trips through a child process, aligned to input order
     b = batch_isolated("defs", [["bar.js", src], ["min.js", "x;" * 4000]])
     assert len(b) == 2 and {d["name"] for d in b[0]} == names and b[1] == [], b
+    ids = identifiers("t.test.js", "// addItem in a comment\nconst x = 'addItem';\n"
+                                   "expect(m.price(1)).toBe(2);\n")
+    assert "price" in ids and "expect" in ids and "addItem" not in ids, ids
+    assert batch_isolated("idents", [["t.test.js", "foo(bar)"]]) == [["bar", "foo"]]
     print("ts_parse: OK")
 
 

@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run Sentinel and gate on its decision
+        id: gate
         env:
           GW: ${{ vars.SENTINEL_GATEWAY_URL }}
           API_KEY: ${{ secrets.SENTINEL_API_KEY }}
@@ -71,6 +72,19 @@ jobs:
             fi
           }
 
+          # Upsert one comment per marker, so the gate comment and the tests comment never overwrite
+          # each other however many times the PR is pushed.
+          upsert() {  # $1 marker, $2 body file
+            [ -n "$PR" ] || return 0
+            id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+                 --jq ".[] | select(.body | startswith(\"$1\")) | .id" 2>/dev/null | head -1 || true)
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$2" >/dev/null
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F "body=@$2" >/dev/null
+            fi || echo "::warning::could not post the PR comment"
+          }
+
           # Authenticated clone URL so Sentinel can fetch a private repo; the token dies with this job.
           REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           event=$(jq -nc \
@@ -89,6 +103,7 @@ jobs:
           run_id=$(echo "$resp" | jq -r '.run_id // empty')
           [ -n "$run_id" ] || { echo "::error::Sentinel refused the run: $resp"; exit 1; }
           echo "Sentinel run: $GW/runs/$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
 
           deadline=$(( $(date +%s) + POLL_TIMEOUT_SECONDS ))
           state=""
@@ -122,12 +137,7 @@ jobs:
           } > sentinel-comment.md
           cat sentinel-comment.md >> "$GITHUB_STEP_SUMMARY"
 
-          # One comment per PR, edited on every push rather than piling up.
-          if [ -n "$PR" ]; then
-            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --body-file sentinel-comment.md 2>/dev/null \
-              || gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file sentinel-comment.md \
-              || echo "::warning::could not post the PR comment"
-          fi
+          upsert "<!-- sentinel-gate -->" sentinel-comment.md
 
           if [ "$state" != "done" ]; then
             echo "::error::Sentinel run did not finish (state=$state): $GW/runs/$run_id"; exit 1
@@ -136,3 +146,56 @@ jobs:
             echo "::error::Sentinel decided '$decision' ($crit critical, $high high). Review: $GW/runs/$run_id"; exit 1
           fi
           echo "Sentinel: promote"
+
+      # Advisory, never blocks the merge: for changed functions that no test reaches, Sentinel writes
+      # a test after the gate decided, proves it against injected bugs, and this step posts it.
+      - name: Generated tests (advisory)
+        if: ${{ always() && steps.gate.outputs.run_id != '' }}
+        continue-on-error: true
+        env:
+          GW: ${{ vars.SENTINEL_GATEWAY_URL }}
+          API_KEY: ${{ secrets.SENTINEL_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ steps.gate.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          GW="${GW%/}"
+          auth() {
+            if [ -n "$API_KEY" ]; then printf 'X-Sentinel-Key: %s' "$API_KEY"; else
+              tok=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                    "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r '.value')
+              printf 'Authorization: Bearer %s' "$tok"; fi
+          }
+          # Upsert one comment per marker, so the gate comment and the tests comment never overwrite
+          # each other however many times the PR is pushed.
+          upsert() {  # $1 marker, $2 body file
+            [ -n "$PR" ] || return 0
+            id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+                 --jq ".[] | select(.body | startswith(\"$1\")) | .id" 2>/dev/null | head -1 || true)
+            if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$2" >/dev/null
+            else
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F "body=@$2" >/dev/null
+            fi || echo "::warning::could not post the PR comment"
+          }
+          deadline=$(( $(date +%s) + 1200 )); gen=pending
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            detail=$(curl -sf "$GW/api/v1/ci/runs/$RUN_ID" -H "$(auth)" || echo '{}')
+            gen=$(echo "$detail" | jq -r '.test_generation // "pending"')
+            if [ "$gen" = "done" ] || [ "$gen" = "none" ]; then break; fi
+            sleep 20
+          done
+          echo "test generation: $gen"
+          n=$(echo "$detail" | jq '[.test_proposals[]? | select(.verdict == "accepted")] | length')
+          [ "$gen" = "done" ] && [ "$n" -gt 0 ] || { echo "no accepted test proposals"; exit 0; }
+          {
+            echo "<!-- sentinel-tests -->"
+            echo "### Sentinel: $n proposed test(s) for changed code no test reached"
+            echo ""
+            echo "Each one passed on this PR's code and caught injected bugs. Nothing is committed —"
+            echo "copy what you want to keep. Details: $GW/runs/$RUN_ID"
+            echo "$detail" | jq -r '.test_proposals[] | select(.verdict == "accepted")
+              | "\n#### `\(.target_file)::\(.target_function)` → `\(.test_path)`\nmutation score \(.mutation_score) · \(.classification // "unclassified")\n\n```\n\(.test_source)\n```"'
+          } > sentinel-tests.md
+          upsert "<!-- sentinel-tests -->" sentinel-tests.md

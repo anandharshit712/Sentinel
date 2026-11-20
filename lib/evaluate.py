@@ -15,6 +15,10 @@ nothing on its own, so the verdict comes from experiments, not an opinion:
      that asserts a bug scores as well as one that asserts the fix.
   6. **Ask the documentation** (`lib.spec_check`): does the code contradict its own docstring?
 
+JS/TS targets take the same steps with Jest and **Stryker** (`lib.jsexec`): the test must pass on
+the original, then Stryker mutates only the target function's line range and runs only the proposed
+test. `spec_check` is Python-only, so a JS/TS result says the specification tier was not run.
+
 No Neuro-SAN, no database, no model: stdlib + pytest + git. Sentinel's `test_evaluator` coded tool
 is a thin wrapper over `evaluate()`; this module is also usable on its own against any Python repo:
 
@@ -33,6 +37,7 @@ import ast
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -41,7 +46,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from lib import differential as differential_mod
-from lib import mutate, spec_check
+from lib import jsexec, mutate, spec_check
 from lib import sandbox as sbx
 from lib.pyexec import fresh_import_env
 
@@ -138,6 +143,20 @@ def classify(mutation_ok: bool, differential: Dict[str, Any] | None,
                                 "bugs included, not what it should do")
 
 
+def _score(caught: List[Dict[str, str]], total: int, function: str,
+           min_score: float) -> tuple[float, str, str]:
+    """(score, verdict, reason) — one rule for both languages."""
+    score = round(len(caught) / total, 3) if total else 0.0
+    if total == 0:
+        return score, "inconclusive", (f"no mutants could be generated for {function} — nothing "
+                                       "to measure against")
+    if score >= min_score:
+        return score, "accepted", (f"caught {len(caught)} of {total} injected bugs "
+                                   f"(threshold {min_score})")
+    return score, "rejected", (f"caught only {len(caught)} of {total} injected bugs "
+                               f"(threshold {min_score})")
+
+
 def _rejected(classification_reason: str, reason: str, **extra: Any) -> Dict[str, Any]:
     return {"verdict": "rejected", "classification": "rejected",
             "classification_reason": classification_reason, "reason": reason,
@@ -146,7 +165,7 @@ def _rejected(classification_reason: str, reason: str, **extra: Any) -> Dict[str
 
 
 def evaluate(workspace: str, target_file: str, function: str, test_source: str,
-             test_path: str = DEFAULT_TEST_PATH, base_sha: Optional[str] = None,
+             test_path: Optional[str] = None, base_sha: Optional[str] = None,
              min_score: float = DEFAULT_MIN_SCORE, max_mutants: int = MAX_MUTANTS,
              run_id: Optional[str] = None) -> Dict[str, Any]:
     """Run the whole experiment for one test over one function. Raises only on bad arguments.
@@ -154,7 +173,12 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
     `workspace` is a checkout of the repository at the code under test. It is copied, never
     written to; the differential tier reads its git history through a throwaway worktree.
     `run_id` names the run's sandbox (lib.sandbox); required in docker mode.
+    `test_path` defaults per language (tests/test_sentinel_generated.py, or a Jest test file).
     """
+    if jsexec.is_js(target_file):
+        return _evaluate_js(workspace, target_file, function, test_source, test_path, base_sha,
+                            min_score, run_id)
+    test_path = test_path or DEFAULT_TEST_PATH
     if is_tautology(test_source):
         return _rejected("asserts nothing about the code under test",
                          "tautological: no assertion depends on the code under test")
@@ -198,18 +222,8 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
             fh.write(original)
 
         total = len(mutants)
-        score = round(len(caught) / total, 3) if total else 0.0
+        score, verdict, reason = _score(caught, total, function, min_score)
         elapsed = round(time.perf_counter() - started, 1)
-
-        if total == 0:
-            verdict, reason = "inconclusive", (f"no mutants could be generated for {function} — "
-                                               "nothing to measure against")
-        elif score >= min_score:
-            verdict, reason = "accepted", (f"caught {len(caught)} of {total} injected bugs "
-                                           f"(threshold {min_score})")
-        else:
-            verdict, reason = "rejected", (f"caught only {len(caught)} of {total} injected bugs "
-                                           f"(threshold {min_score})")
 
         # ---- 3. the second witness: what did this change actually alter? (11 §4) --------
         # Runs on the ORIGINAL workspace (which has git history), not the sandbox copy.
@@ -238,9 +252,99 @@ def evaluate(workspace: str, target_file: str, function: str, test_source: str,
                 "classification_reason": class_reason, "oracle_evidence": oracle_evidence,
                 "reason": reason, "mutation_score": score,
                 "caught": caught, "missed": missed, "mutants_total": total,
-                "duration_seconds": elapsed, "threshold": min_score}
+                "duration_seconds": elapsed, "threshold": min_score,
+                "language": "python", "test_path": test_path}
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+
+
+_JS_ASSERTION = re.compile(r"\b(?:expect|assert\w*)\s*\(")
+
+
+def _not_measured(reason: str, **extra: Any) -> Dict[str, Any]:
+    return {**_rejected("not measured", reason), "verdict": "inconclusive",
+            "classification": "characterization", **extra}
+
+
+def _evaluate_js(workspace: str, target_file: str, function: str, test_source: str,
+                 test_path: Optional[str], base_sha: Optional[str], min_score: float,
+                 run_id: Optional[str]) -> Dict[str, Any]:
+    """The same experiment for a Jest test, with Stryker as the mutation engine."""
+    if not (test_path and jsexec.TEST_RE.search(test_path)):
+        test_path = jsexec.default_test_path(workspace, target_file)   # Jest must see it as a test
+    extra = {"language": "javascript", "test_path": test_path}
+    # ponytail: structural screen only (no expect/assert call at all). `expect(1).toBe(1)` passes
+    # it — and then catches zero mutants, so the mutation score rejects it anyway.
+    if not _JS_ASSERTION.search(test_source):
+        return _rejected("asserts nothing about the code under test",
+                         "tautological: the test makes no expect()/assert call", **extra)
+    abs_target = os.path.join(workspace, target_file.replace("/", os.sep))
+    if not os.path.exists(abs_target):
+        raise FileNotFoundError(f"target file {target_file} not found in the workspace")
+    with open(abs_target, encoding="utf-8", errors="replace") as fh:
+        original = fh.read()
+    span = jsexec.function_span(original, target_file, function)
+    if not span:
+        raise ValueError(f"{function} not found in {target_file}")
+
+    err = jsexec.ensure_tooling(run_id, workspace)
+    if err:
+        return _not_measured(err, **extra)
+
+    scratch = tempfile.mkdtemp(prefix="sentinel-eval-", dir=sbx.scratch_dir(workspace))
+    repo = os.path.join(scratch, "repo")
+    try:
+        shutil.copytree(workspace, repo, symlinks=True,
+                        ignore=shutil.ignore_patterns(".git", "node_modules", ".stryker-tmp",
+                                                      "coverage"))
+        jsexec.attach_node_modules(workspace, repo)
+        abs_test = os.path.join(repo, test_path.replace("/", os.sep))
+        os.makedirs(os.path.dirname(abs_test), exist_ok=True)
+        with open(abs_test, "w", encoding="utf-8") as fh:
+            fh.write(test_source)
+
+        started = time.perf_counter()
+        # ---- 1. must pass on correct code -----------------------------------------------
+        passed, tail = jsexec.run_jest(run_id, repo, test_path)
+        if not passed:
+            return _rejected("red against unmodified code",
+                             "fails against unmodified code — a test that is red on correct "
+                             "code is worse than no test", output=tail, **extra)
+
+        # ---- 2. Stryker over the target's lines, running only this test -----------------
+        ms = jsexec.stryker(run_id, repo, target_file, span, test_path)
+        if ms.get("error"):
+            return _not_measured(ms["error"], **extra)
+        caught, missed, total = ms["caught"], ms["missed"], ms["total"]
+        score, verdict, reason = _score(caught, total, function, min_score)
+        elapsed = round(time.perf_counter() - started, 1)
+
+        # ---- 3. the second witness, as for Python ---------------------------------------
+        diff_evidence = differential_mod.compare(
+            workspace, base_sha, target_file, function, test_path, test_source,
+            head_passed=True, run_id=run_id) if base_sha else {
+                "tier": "differential", "result": differential_mod.UNKNOWN,
+                "reason": "no base commit supplied for this run"}
+        classification, class_reason = classify(verdict == "accepted", diff_evidence, None)
+        oracle_evidence = {
+            "mutation": {"tier": "mutation", "engine": "stryker", "score": score,
+                         "caught": len(caught), "total": total, "threshold": min_score,
+                         "lines": list(span),
+                         "witness": "the implementation itself — sensitivity, not correctness"},
+            "differential": diff_evidence,
+            "specification": {"tier": "specification", "checked": False, "mismatches": [],
+                              "reason": "spec_check is Python-only; not run for JS/TS targets"},
+        }
+        logger.info("evaluate(js) %s -> %s / %s (stryker score %.2f, %d mutants, %.1fs)",
+                    function, verdict, classification, score, total, elapsed)
+        return {"verdict": verdict, "classification": classification,
+                "classification_reason": class_reason, "oracle_evidence": oracle_evidence,
+                "reason": reason, "mutation_score": score,
+                "caught": caught, "missed": missed, "mutants_total": total,
+                "duration_seconds": elapsed, "threshold": min_score, **extra}
+    finally:
+        jsexec.detach_node_modules(repo)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
